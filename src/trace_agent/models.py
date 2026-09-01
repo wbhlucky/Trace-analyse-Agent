@@ -52,6 +52,17 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
+    RESUMABLE = "resumable"
+    RUNNING_RECOVERY = "running-recovery"
+
+
+class StepStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 class FindingSeverity(StrEnum):
@@ -530,6 +541,28 @@ class SkillSnapshot(StrictModel):
     fingerprint: str
 
 
+class RunStepState(StrictModel):
+    step: str
+    status: StepStatus
+    input_hash: str | None = None
+    artifact_paths: list[str] = Field(default_factory=list)
+    error: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class JobError(StrictModel):
+    code: str
+    category: str
+    stage: str | None = None
+    retryable: bool = False
+    resumable: bool = False
+    user_message: str
+    suggested_action: str
+    trace_id: str | None = None
+    internal_detail: str | None = None
+
+
 class RunManifest(StrictModel):
     run_id: str
     trace_id: str
@@ -561,6 +594,10 @@ class RunManifest(StrictModel):
     skills: list[SkillSnapshot] = Field(default_factory=list)
     trace_capabilities: list[TraceCapability] = Field(default_factory=list)
     available_tools: list[str] = Field(default_factory=list)
+    step_states: list[RunStepState] = Field(default_factory=list)
+    resume_from: str | None = None
+    attempt_id: str | None = None
+    last_heartbeat_at: datetime | None = None
     started_at: datetime = Field(default_factory=utc_now)
     completed_at: datetime | None = None
     error: str | None = None

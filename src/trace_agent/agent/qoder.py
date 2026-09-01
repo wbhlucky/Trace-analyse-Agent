@@ -3,18 +3,26 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
-from trace_agent.policies import (
-    EvidenceSubmissionPolicy,
-    SubmissionRejection,
-)
 from trace_agent.config import LlmRuntimeConfig, is_native_byok_provider
+from trace_agent.errors import (
+    AgentFailure,
+    ErrorCategory,
+    async_retry,
+    classify_exception,
+)
 from trace_agent.models import (
     AgentAnalysisDraft,
     AnalysisResult,
     AnalyzeRequest,
 )
+from trace_agent.policies import (
+    EvidenceSubmissionPolicy,
+    SubmissionRejection,
+)
+from trace_agent.runtime import EventType, RunContext
 from trace_agent.skills import SkillDefinition
 from trace_agent.tools import ToolDefinition, ToolRegistry
 
@@ -41,6 +49,9 @@ class QoderAgentSdkAgent:
         self,
         request: AnalyzeRequest,
         tools: ToolRegistry,
+        *,
+        checkpoint: Any | None = None,
+        run_context: RunContext | None = None,
     ) -> AnalysisResult:
         try:
             from qoder_agent_sdk import (
@@ -150,25 +161,106 @@ class QoderAgentSdkAgent:
         text_blocks: list[str] = []
         result_message: Any | None = None
         attempts: list[dict[str, Any]] = []
-        async with QoderSDKClient(options=options) as client:
-            await client.query(
-                self._user_prompt(
-                    request,
-                    preloaded_evidence=tools.preloaded_results(),
-                    include_output_schema=manual_submission,
-                )
-            )
+        retry_attempts = self._positive_int_env(
+            "TRACE_AGENT_QODER_RETRY_ATTEMPTS",
+            default=3,
+            maximum=5,
+        )
+
+        async def run_turn(prompt: str) -> tuple[list[str], Any | None]:
+            turn_blocks: list[str] = []
+            turn_result: Any | None = None
+            if run_context is not None:
+                run_context.raise_if_cancelled()
+            await client.query(prompt)
             async for message in client.receive_response():
+                if run_context is not None:
+                    run_context.raise_if_cancelled()
                 if isinstance(message, AssistantMessage):
-                    text_blocks.extend(
-                        block.text
-                        for block in message.content
-                        if isinstance(block, TextBlock)
-                    )
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            turn_blocks.append(block.text)
+                            if run_context is not None:
+                                run_context.publish(
+                                    EventType.MODEL_MESSAGE_DELTA,
+                                    data={"delta": block.text},
+                                )
                 elif isinstance(message, ResultMessage):
-                    result_message = message
+                    turn_result = message
                     if message.result:
-                        text_blocks.append(message.result)
+                        turn_blocks.append(message.result)
+                    if run_context is not None:
+                        run_context.publish(
+                            EventType.MODEL_MESSAGE_COMPLETED,
+                            data={
+                                "result": message.result,
+                                "subtype": getattr(
+                                    message, "subtype", None
+                                ),
+                            },
+                        )
+            return turn_blocks, turn_result
+
+        def record_transport_retry(exc: Exception, attempt: int) -> None:
+            attempts.append(
+                {
+                    "attempt": f"transport-retry-{attempt}",
+                    "category": classify_exception(exc).value,
+                    "exception_type": type(exc).__name__,
+                    "error": self._bounded_preview(str(exc), 4000) or "",
+                }
+            )
+
+        def fail(
+            exc: Exception,
+            *,
+            session_id: str | None = None,
+        ) -> AgentFailure:
+            attempts.append(
+                {
+                    "attempt": "transport-exhausted",
+                    "category": classify_exception(exc).value,
+                    "exception_type": type(exc).__name__,
+                    "error": self._bounded_preview(str(exc), 4000) or "",
+                }
+            )
+            diagnostic_path = self._write_agent_result(
+                request,
+                status="failed",
+                attempts=attempts,
+                tools=tools,
+            )
+            if isinstance(exc, AgentFailure):
+                if not exc.diagnostic_paths:
+                    exc.diagnostic_paths.append(diagnostic_path)
+                if exc.session_id is None:
+                    exc.session_id = session_id
+                return exc
+            return AgentFailure(
+                str(exc) or type(exc).__name__,
+                category=classify_exception(exc),
+                session_id=session_id,
+                diagnostic_paths=[diagnostic_path],
+            )
+
+        initial_prompt = self._user_prompt(
+            request,
+            preloaded_evidence=tools.preloaded_results(),
+            include_output_schema=manual_submission,
+        )
+        async with QoderSDKClient(options=options) as client:
+            try:
+                text_blocks, result_message = await async_retry(
+                    lambda: run_turn(initial_prompt),
+                    max_attempts=retry_attempts,
+                    on_retry=record_transport_retry,
+                )
+            except Exception as exc:
+                failure = fail(
+                    exc,
+                    session_id=getattr(result_message, "session_id", None),
+                )
+                raise failure from exc
 
             parsed, parse_source, parse_errors = self._parse_with_submission(
                 submission_state=submission_state,
@@ -197,57 +289,133 @@ class QoderAgentSdkAgent:
                 result_message is None
                 or not bool(getattr(result_message, "is_error", False))
             )
-            if can_repair:
+            if can_repair and parse_errors:
                 tools.seal(
-                    "初次最终 JSON 未通过 AnalysisResult 校验，"
-                    "正在执行无工具修复回合"
+                    "???? JSON ??? AnalysisResult ???"
+                    "???????????"
                 )
-                repair_text_blocks: list[str] = []
-                repair_result: Any | None = None
-                await client.query(
-                    self._repair_prompt(
+                max_repair_attempts = self._positive_int_env(
+                    "TRACE_AGENT_MAX_AGENT_REPAIR_ATTEMPTS",
+                    default=3,
+                    maximum=5,
+                )
+                max_repair_tokens = self._positive_int_env(
+                    "TRACE_AGENT_MAX_REPAIR_TOKENS",
+                    default=40_000,
+                    maximum=1_000_000,
+                )
+                raw_wall_time = os.environ.get(
+                    "TRACE_AGENT_MAX_REPAIR_SECONDS",
+                    "120",
+                )
+                try:
+                    max_repair_seconds = max(
+                        0.0,
+                        float(raw_wall_time),
+                    )
+                except ValueError:
+                    max_repair_seconds = 120.0
+
+                repair_started = perf_counter()
+                repair_token_count = 0
+                repair_attempt = 0
+
+                while parse_errors and repair_attempt < max_repair_attempts:
+                    repair_attempt += 1
+                    budget = tools.budget_snapshot()
+                    if budget.get("remaining_invocations", 0) <= 0:
+                        parse_errors.append(
+                            "????????????????"
+                        )
+                        break
+                    if (
+                        max_repair_seconds > 0
+                        and perf_counter() - repair_started
+                        >= max_repair_seconds
+                    ):
+                        parse_errors.append(
+                            "?????? wall-time ??"
+                        )
+                        break
+
+                    repair_prompt = self._repair_prompt(
                         parse_errors,
                         manual_submission=manual_submission,
                     )
-                )
-                async for message in client.receive_response():
-                    if isinstance(message, AssistantMessage):
-                        repair_text_blocks.extend(
-                            block.text
-                            for block in message.content
-                            if isinstance(block, TextBlock)
+                    repair_text_blocks: list[str] = []
+                    repair_result: Any | None = None
+                    try:
+                        repair_text_blocks, repair_result = await async_retry(
+                            lambda: run_turn(repair_prompt),
+                            max_attempts=retry_attempts,
+                            on_retry=record_transport_retry,
                         )
-                    elif isinstance(message, ResultMessage):
-                        repair_result = message
-                        if message.result:
-                            repair_text_blocks.append(message.result)
+                    except Exception as exc:
+                        failure = fail(
+                            exc,
+                            session_id=getattr(
+                                repair_result,
+                                "session_id",
+                                None,
+                            ),
+                        )
+                        raise failure from exc
 
-                repaired, repair_source, repair_errors = (
-                    self._parse_with_submission(
-                        submission_state=submission_state,
-                        result_message=repair_result,
-                        text_blocks=repair_text_blocks,
+                    repair_token_count += sum(
+                        len(text) for text in repair_text_blocks
                     )
-                )
-                attempts.append(
-                    self._result_diagnostic(
-                        attempt="structured-repair",
-                        result_message=repair_result,
-                        text_blocks=repair_text_blocks,
-                        parse_source=repair_source,
-                        parse_errors=repair_errors,
+                    repaired, repair_source, repair_errors = (
+                        self._parse_with_submission(
+                            submission_state=submission_state,
+                            result_message=repair_result,
+                            text_blocks=repair_text_blocks,
+                        )
                     )
-                )
-                result_message = repair_result
-                parse_errors = repair_errors
-                if repaired is not None:
-                    self._write_agent_result(
-                        request,
-                        status="repaired",
-                        attempts=attempts,
-                        tools=tools,
+                    attempts.append(
+                        self._result_diagnostic(
+                            attempt=(
+                                f"structured-repair-{repair_attempt}"
+                            ),
+                            result_message=repair_result,
+                            text_blocks=repair_text_blocks,
+                            parse_source=repair_source,
+                            parse_errors=repair_errors,
+                        )
                     )
-                    return repaired
+                    result_message = repair_result
+                    parse_errors = repair_errors
+
+                    if repaired is not None:
+                        self._write_agent_result(
+                            request,
+                            status="repaired",
+                            attempts=attempts,
+                            tools=tools,
+                        )
+                        return repaired
+
+                    if checkpoint is not None:
+                        try:
+                            checkpoint(
+                                {
+                                    "attempt": repair_attempt,
+                                    "parse_errors": list(parse_errors),
+                                    "session_id": getattr(
+                                        repair_result,
+                                        "session_id",
+                                        None,
+                                    ),
+                                }
+                            )
+                        except Exception:
+                            pass
+
+                    if repair_token_count >= max_repair_tokens:
+                        parse_errors.append(
+                            "?????? token ??"
+                        )
+                        break
+
 
         diagnostic_path = self._write_agent_result(
             request,
@@ -255,6 +423,7 @@ class QoderAgentSdkAgent:
             attempts=attempts,
             tools=tools,
         )
+        session_id = getattr(result_message, "session_id", None)
         if (
             result_message is not None
             and bool(getattr(result_message, "is_error", False))
@@ -267,16 +436,21 @@ class QoderAgentSdkAgent:
             detail = detail or str(
                 getattr(result_message, "subtype", "unknown")
             )
-            raise RuntimeError(
-                "Qoder Agent 执行失败："
-                f"{detail}；session="
-                f"{getattr(result_message, 'session_id', 'unknown')}；"
-                f"诊断={diagnostic_path}"
+            raise AgentFailure(
+                f"Qoder Agent 执行失败：{detail}",
+                category=ErrorCategory.USER_RECOVERABLE,
+                session_id=session_id,
+                diagnostic_paths=[diagnostic_path],
             )
         detail = "；".join(parse_errors[-3:]) or "没有可解析的最终 JSON"
-        raise RuntimeError(
-            "Qoder Agent 最终结构化结果不符合 AnalysisResult："
-            f"{detail}；诊断={diagnostic_path}"
+        raise AgentFailure(
+            (
+                "Qoder Agent 最终结构化结果不符合 AnalysisResult："
+                f"{detail}"
+            ),
+            category=ErrorCategory.USER_RECOVERABLE,
+            session_id=session_id,
+            diagnostic_paths=[diagnostic_path],
         )
 
     @staticmethod

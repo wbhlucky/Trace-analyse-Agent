@@ -453,7 +453,22 @@ pre.json {
 .job-main { display: grid; gap: 2px; min-width: 0; }
 .job-case { font-weight: 650; color: var(--ink-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job-meta { font-size: 12px; color: var(--muted); }
+.job-error { margin-top: 4px; }
+.job-error summary { cursor: pointer; list-style: none; }
+.job-error .error-copy { color: var(--red); }
+.job-error-detail { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--bg-1); }
+.diagnostics-output { max-height: 260px; overflow: auto; margin: 8px 0 0; white-space: pre-wrap; }
+.analyze-error { margin-top: 12px; padding: 8px 10px; border: 1px solid var(--red); border-radius: 6px; color: var(--red); font-size: 13px; }
 .job-duration { font-family: var(--mono); font-size: 12px; color: var(--cyan); white-space: nowrap; }
+.job-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.job-live { min-width: 0; margin-top: 6px; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.job-live-phase { color: var(--purple); font-weight: 650; }
+.job-live-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.job-tool-chip { padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line-soft); background: var(--bg-1); font-size: 11px; white-space: nowrap; }
+.job-tool-chip.status-running { color: var(--cyan); border-color: rgba(68, 180, 210, 0.35); }
+.job-tool-chip.status-completed { color: var(--green); border-color: rgba(95, 190, 125, 0.35); }
+.job-tool-chip.status-failed { color: var(--red); border-color: rgba(231, 99, 99, 0.35); }
+.job-live-model { margin: 6px 0 0; max-height: 180px; overflow: auto; padding: 8px 10px; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--bg-1); font-family: var(--mono); font-size: 11px; white-space: pre-wrap; word-break: break-word; }
 .job-status { flex: 0 0 auto; }
 .error-text { color: var(--red); font-size: 12px; }
 

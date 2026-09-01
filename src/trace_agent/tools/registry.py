@@ -172,6 +172,7 @@ class ToolRegistry:
                     "tool": name,
                     "activity": activity,
                     "tool_count": tool_count + 1,
+                    "arguments": dict(call_arguments),
                 },
             ),
         )

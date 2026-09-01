@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import mimetypes
+import queue
 import socket
 import threading
 import uuid
@@ -20,9 +21,20 @@ from rich.console import Console
 from trace_agent.agent import DefaultAnalysisAgentFactory
 from trace_agent.application import AnalyzeApplication
 from trace_agent.config import LlmRuntimeConfig
+from trace_agent.errors import (
+    AgentFailure,
+    ErrorCategory,
+    RunInterrupted,
+    classify_exception,
+)
+from trace_agent.runtime import (
+    SqliteEventStore,
+    get_event_bus,
+)
 from trace_agent.models import (
     AgentKind,
     AnalyzeRequest,
+    JobError,
     LlmProvider,
     ScenarioType,
 )
@@ -190,6 +202,10 @@ def _build_bundle(case_dir: Path, case_name: str) -> dict[str, Any]:
     }
 
 
+# Keep a small yet complete public contract for the frontend: state (status),
+# reason (user_message + suggested_action), next action (resumable) and details
+# (a separate diagnostics endpoint). Internal stack traces are never sent to
+# the browser.
 @dataclass
 class AnalysisJob:
     id: str
@@ -198,8 +214,77 @@ class AnalysisJob:
     output_dir: Path | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
-    error: str | None = None
+    error: JobError | None = None
     params: dict[str, Any] = field(default_factory=dict)
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+
+
+_CATEGORY_ACTIONS = {
+    ErrorCategory.RETRYABLE.value: "????????????????????????",
+    ErrorCategory.USER_RECOVERABLE.value: "????????Trace ????? Agent ??????",
+    ErrorCategory.FATAL.value: "???????????????????????",
+}
+
+
+def _job_error_from_exception(
+    exc: BaseException,
+    *,
+    trace_id: str | None,
+    output_dir: Path | None,
+) -> JobError:
+    category = classify_exception(exc)
+    stage = _last_failed_step(output_dir)
+    return JobError(
+        code=type(exc).__name__,
+        category=category.value,
+        stage=stage,
+        retryable=category is ErrorCategory.RETRYABLE,
+        resumable=_job_is_resumable(output_dir),
+        user_message=_user_message(exc, category),
+        suggested_action=_CATEGORY_ACTIONS.get(
+            category.value,
+            _CATEGORY_ACTIONS[ErrorCategory.FATAL.value],
+        ),
+        trace_id=trace_id,
+        internal_detail=str(exc) or type(exc).__name__,
+    )
+
+
+def _user_message(exc: BaseException, category: ErrorCategory) -> str:
+    if isinstance(exc, AgentFailure):
+        return str(exc) or "Agent ?????"
+    if category is ErrorCategory.RETRYABLE:
+        return "???????????????????"
+    if category is ErrorCategory.USER_RECOVERABLE:
+        return "?????????????????????"
+    message = str(exc).strip()
+    return message or "???????????"
+
+
+def _last_failed_step(output_dir: Path | None) -> str | None:
+    if output_dir is None:
+        return None
+    run = _load_json(output_dir / "run.json")
+    if not isinstance(run, dict):
+        return None
+    for state in reversed(run.get("step_states") or []):
+        if isinstance(state, dict) and state.get("status") == "failed":
+            return state.get("step")
+    return None
+
+
+def _job_is_resumable(output_dir: Path | None) -> bool:
+    if output_dir is None:
+        return False
+    run = _load_json(output_dir / "run.json")
+    if not isinstance(run, dict):
+        return False
+    return run.get("status") in {
+        "interrupted",
+        "resumable",
+        "running-recovery",
+        "running",
+    }
 
 
 _JOB_LOCK = threading.Lock()
@@ -217,6 +302,13 @@ def _job_view(job: AnalysisJob) -> dict[str, Any]:
     if job.started_at is not None:
         end = job.completed_at or datetime.now(timezone.utc)
         duration_s = (end - job.started_at).total_seconds()
+    error = None
+    if job.error is not None:
+        error = {
+            "user_message": job.error.user_message,
+            "suggested_action": job.error.suggested_action,
+            "trace_id": job.error.trace_id,
+        }
     return {
         "id": job.id,
         "status": job.status,
@@ -226,9 +318,28 @@ def _job_view(job: AnalysisJob) -> dict[str, Any]:
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         "duration_s": duration_s,
         "duration_display": _format_duration(duration_s, running=job.status in ("queued", "running")),
-        "error": job.error,
+        "error": error,
         "params": job.params,
     }
+
+
+def _job_diagnostics(job: AnalysisJob) -> dict[str, Any]:
+    if job.output_dir is None:
+        return {"files": {}}
+    files: dict[str, Any] = {}
+    for name in ("run.json", "agent-result.json"):
+        files[name] = _load_json(job.output_dir / name)
+    steps_dir = job.output_dir / "steps"
+    step_states = []
+    if steps_dir.is_dir():
+        for path in sorted(steps_dir.glob("*.state.json")):
+            step_states.append(
+                {
+                    "name": path.name,
+                    "content": _load_json(path),
+                }
+            )
+    return {"files": files, "steps": step_states}
 
 
 def _default_output_name(trace_path: Path, scenario_type: str) -> str:
@@ -254,7 +365,19 @@ def _run_analysis_job(job: AnalysisJob, project_root: Path, results_root: Path) 
         trace_path = _resolve_user_path(params["trace_path"], project_root)
         if trace_path is None:
             job.status = "failed"
-            job.error = "trace_path is required"
+            job.error = JobError(
+                code="MissingTracePath",
+                category=ErrorCategory.USER_RECOVERABLE.value,
+                stage="run.prepare",
+                retryable=False,
+                resumable=False,
+                user_message="Trace ?????????",
+                suggested_action=(
+                    "?????? Trace ????????????"
+                ),
+                trace_id=params.get("trace_id"),
+                internal_detail="trace_path is required",
+            )
             job.completed_at = datetime.now(timezone.utc)
             _set_job_status(job, "failed")
             return
@@ -325,16 +448,38 @@ def _run_analysis_job(job: AnalysisJob, project_root: Path, results_root: Path) 
         job.started_at = datetime.now(timezone.utc)
         _set_job_status(job, "running")
 
-        result = asyncio.run(application.run(request))
+        result = asyncio.run(
+            application.run(
+                request,
+                run_id=job.id,
+                cancel_event=job.cancel_event,
+            )
+        )
 
         job.completed_at = datetime.now(timezone.utc)
         job.status = "completed"
         job.case_name = output_dir.name
         _ = result
-    except Exception as exc:  # noqa: BLE001 - surface user-facing job error
+    except RunInterrupted as exc:
+        job.completed_at = datetime.now(timezone.utc)
+        job.status = "interrupted"
+        job.error = _job_error_from_exception(
+            exc,
+            trace_id=params.get("trace_id") or (
+                job.case_name
+            ),
+            output_dir=job.output_dir,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface structured job error
         job.completed_at = datetime.now(timezone.utc)
         job.status = "failed"
-        job.error = str(exc)
+        job.error = _job_error_from_exception(
+            exc,
+            trace_id=params.get("trace_id") or (
+                job.case_name
+            ),
+            output_dir=job.output_dir,
+        )
 
 
 def _submit_analysis(params: dict[str, Any], project_root: Path, results_root: Path) -> dict[str, Any]:
@@ -347,6 +492,7 @@ def _submit_analysis(params: dict[str, Any], project_root: Path, results_root: P
 
 class DashboardHandler(BaseHTTPRequestHandler):
     server_version = "DitingAgentDashboard/1.0"
+    protocol_version = "HTTP/1.1"
 
     # Referenced from the class attribute set by the server factory.
     results_dir: Path = Path("results")
@@ -377,6 +523,89 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _handle_event_stream(self, job_id: str) -> None:
+        with _JOB_LOCK:
+            job = _JOBS.get(job_id)
+        if job is None:
+            self._send_json(
+                {"error": "job not found"},
+                HTTPStatus.NOT_FOUND,
+            )
+            return
+
+        from_seq = 1
+        last_event_id = self.headers.get("Last-Event-ID")
+        if last_event_id:
+            try:
+                from_seq = int(last_event_id) + 1
+            except ValueError:
+                from_seq = 1
+
+        subscription = get_event_bus().subscribe(
+            job_id,
+            from_seq=from_seq,
+        )
+        try:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            self.wfile.flush()
+
+            while True:
+                try:
+                    event = subscription.queue.get(timeout=15.0)
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                    continue
+                if event is None:
+                    break
+                serialized = json.dumps(
+                    event.to_dict(),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                frame = (
+                    f"id: {event.seq}\n"
+                    "event: message\n"
+                    f"data: {serialized}\n\n"
+                ).encode("utf-8")
+                self.wfile.write(frame)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        finally:
+            subscription.unsubscribe()
+            self.close_connection = True
+
+
+    @staticmethod
+    def _cancel_route_job_id(path: str) -> str | None:
+        for prefix in ("/runs/", "/api/analyze/jobs/"):
+            if not path.startswith(prefix):
+                continue
+            segments = path.removeprefix(prefix).strip("/").split("/")
+            if len(segments) == 2 and segments[1] == "cancel":
+                return segments[0]
+        return None
+
+    def _cancel_run(self, job_id: str) -> None:
+        with _JOB_LOCK:
+            job = _JOBS.get(job_id)
+        if job is None:
+            self._send_json(
+                {"error": "job not found"},
+                HTTPStatus.NOT_FOUND,
+            )
+            return
+        if job.status in ("queued", "running"):
+            job.cancel_event.set()
+        self._send_json(_job_view(job))
+
 
     def _resolve_case(self, case_name: str) -> Path:
         # Prevent traversal; case names come from a URL path segment.
@@ -432,11 +661,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/api/analyze/jobs/"):
-            job_id = path.removeprefix("/api/analyze/jobs/").strip("/")
+            remainder = path.removeprefix("/api/analyze/jobs/").strip("/")
+            segments = remainder.split("/")
+            job_id = segments[0]
             with _JOB_LOCK:
                 job = _JOBS.get(job_id)
             if job is None:
                 self._send_json({"error": "job not found"}, HTTPStatus.NOT_FOUND)
+                return
+            if len(segments) > 1 and segments[1] == "events":
+                self._handle_event_stream(job_id)
+                return
+            if len(segments) > 1 and segments[1] == "diagnostics":
+                self._send_json(_job_diagnostics(job))
                 return
             self._send_json(_job_view(job))
             return
@@ -484,6 +721,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         parsed = urlparse(self.path)
         path = parsed.path
+
+        cancel_job_id = self._cancel_route_job_id(path)
+        if cancel_job_id is not None:
+            self._cancel_run(cancel_job_id)
+            return
 
         if path != "/api/analyze":
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
@@ -551,6 +793,12 @@ def serve(
             f"[red]\u7ed3\u679c\u76ee\u5f55\u4e0d\u5b58\u5728: {results_root}[/red]",
         )
         raise SystemExit(1)
+
+    get_event_bus().register_store(
+        SqliteEventStore(
+            results_root / ".trace-agent" / "events.sqlite3"
+        )
+    )
 
     handler = type(
         "ConfiguredDashboardHandler",

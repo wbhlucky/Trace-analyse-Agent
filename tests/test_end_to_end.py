@@ -23,6 +23,8 @@ from trace_agent.skills import (
 from trace_agent.trace import HTraceAdapter
 from trace_agent.trace.trace_streamer import ProcessResult
 
+from sample_trace_schema import sample_trace_schema
+
 
 class FakeTraceStreamerRunner:
     def run(
@@ -38,18 +40,7 @@ class FakeTraceStreamerRunner:
 
         database_path = Path(command[-1])
         with sqlite3.connect(database_path) as connection:
-            connection.executescript(
-                """
-                CREATE TABLE process (id INTEGER, ipid INTEGER);
-                CREATE TABLE thread (id INTEGER, ipid INTEGER, itid INTEGER);
-                CREATE TABLE callstack (id INTEGER, callid INTEGER, ts INTEGER);
-                CREATE TABLE sched_slice (id INTEGER, itid INTEGER, ts INTEGER);
-                CREATE TABLE frame_slice (id INTEGER, ipid INTEGER);
-                CREATE TABLE frame_maps (src_row INTEGER, dst_row INTEGER);
-                CREATE TABLE diskio (id INTEGER);
-                CREATE TABLE instant (id INTEGER, ref INTEGER, ts INTEGER);
-                """
-            )
+            connection.executescript(sample_trace_schema())
         return ProcessResult(0, b"converted", b"")
 
 
@@ -108,11 +99,75 @@ def test_local_analysis_generates_result_bundle(tmp_path):
     )
     assert validation["valid"] is True
     assert Path(run["database_path"]).is_file()
+    with sqlite3.connect(run["database_path"]) as connection:
+        callstack_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(callstack)"
+            )
+        }
+        assert {
+            "callid",
+            "ts",
+            "name",
+            "dur",
+            "depth",
+            "parent_id",
+            "child_callid",
+        } <= callstack_columns
+        index_names = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            )
+        }
+        assert "idx_callstack_callid" in index_names
     assert "trace-database" in run["trace_capabilities"]
     assert run["trace_conversions"][0]["version"] == "version test"
     assert findings["findings"] == []
     assert evidence[0]["evidence_id"] == "ev-0001"
     assert evidence[0]["tool"] == "get_trace_overview"
+
+
+def test_run_persists_durable_step_states(tmp_path):
+    trace_path = tmp_path / "current.htrace"
+    trace_path.write_bytes(b"trace-current")
+    output_dir = tmp_path / "results"
+
+    request = AnalyzeRequest(
+        trace_id="durable-case",
+        trace_path=trace_path,
+        scenario_type=ScenarioType.FRAME_JANK,
+        scenario="????",
+        symptom="??????",
+        output_dir=output_dir,
+        agent=AgentKind.LOCAL,
+    )
+    application = AnalyzeApplication(
+        trace_adapter=make_trace_adapter(tmp_path),
+        agent=LocalAnalysisAgent(),
+    )
+
+    asyncio.run(application.run(request))
+
+    run = json.loads((output_dir / "run.json").read_text(encoding="utf-8"))
+    assert run["status"] == "completed"
+    assert run["attempt_id"] is not None
+    assert (output_dir / "steps").is_dir()
+    assert (output_dir / "steps" / "agent.analyze.state.json").is_file()
+
+    states = {item["step"]: item for item in run["step_states"]}
+    assert {
+        "run.prepare",
+        "trace.prepare",
+        "analysis.setup",
+        "analysis.preflight",
+        "agent.analyze",
+        "analysis.normalize",
+        "analysis.validate",
+        "report.render",
+    } <= states.keys()
+    assert all(item["status"] == "done" for item in states.values())
 
 
 def test_application_reports_all_lifecycle_stages(tmp_path):

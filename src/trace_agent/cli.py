@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import traceback
 from pathlib import Path
 from typing import Annotated
 
@@ -11,6 +14,7 @@ from trace_agent.agent import DefaultAnalysisAgentFactory
 from trace_agent.application import AnalyzeApplication
 from trace_agent.cli_progress import CliProgressRenderer
 from trace_agent.config import LlmRuntimeConfig, save_project_llm_config
+from trace_agent.errors import AgentFailure, classify_exception
 from trace_agent.models import (
     AgentKind,
     AnalyzeRequest,
@@ -32,6 +36,57 @@ def _version_callback(value: bool) -> None:
     if value:
         typer.echo(__version__)
         raise typer.Exit()
+
+
+def _print_failure(
+    exc: Exception,
+    *,
+    output_dir: Path,
+    show_traceback: bool,
+) -> None:
+    failure = exc if isinstance(exc, AgentFailure) else None
+    category = (failure.category if failure else classify_exception(exc)).value
+    error_type = type(exc).__name__
+
+    run_id = "unknown"
+    session_id = getattr(exc, "session_id", None)
+    diagnostic_paths = list(
+        getattr(exc, "diagnostic_paths", None) or []
+    )
+    run_path = output_dir.expanduser().resolve() / "run.json"
+    agent_result_path = output_dir.expanduser().resolve() / "agent-result.json"
+
+    try:
+        manifest = json.loads(run_path.read_text(encoding="utf-8"))
+        run_id = manifest.get("run_id", "unknown")
+        if not session_id:
+            session_id = manifest.get("agent_session_id")
+    except (OSError, ValueError, TypeError):
+        pass
+
+    if run_path not in diagnostic_paths:
+        diagnostic_paths.append(run_path)
+    if (
+        agent_result_path.exists()
+        and agent_result_path not in diagnostic_paths
+    ):
+        diagnostic_paths.append(agent_result_path)
+
+    typer.secho("分析失败", fg=typer.colors.RED, err=True)
+    typer.echo(f"  错误类型: {category}")
+    typer.echo(f"  Exception: {error_type}: {exc}")
+    typer.echo(f"  Run ID : {run_id}")
+    if session_id:
+        typer.echo(f"  Session: {session_id}")
+    if diagnostic_paths:
+        typer.echo("  诊断文件:")
+        for path in diagnostic_paths:
+            typer.echo(f"    - {path}")
+
+    if show_traceback or os.environ.get("TRACE_AGENT_DEBUG"):
+        traceback.print_exception(exc)
+    else:
+        typer.echo("  提示: 使用 --show-traceback 查看完整调用栈")
 
 
 @app.callback()
@@ -274,6 +329,13 @@ def analyze(
             help="显示当前阶段、Agent 工具取证和耗时。",
         ),
     ] = True,
+    show_traceback: Annotated[
+        bool,
+        typer.Option(
+            "--show-traceback",
+            help="失败时显示完整 Python 调用栈以辅助定位问题。",
+        ),
+    ] = False,
 ) -> None:
     llm_config: LlmRuntimeConfig | None = None
     if agent is AgentKind.QODER:
@@ -339,8 +401,13 @@ def analyze(
     try:
         result = asyncio.run(application.run(request))
     except Exception as exc:
-        typer.secho(f"分析失败：{exc}", fg=typer.colors.RED, err=True)
+        _print_failure(
+            exc,
+            output_dir=request.output_dir,
+            show_traceback=show_traceback,
+        )
         raise typer.Exit(code=1) from exc
+
     finally:
         if progress_renderer is not None:
             progress_renderer.stop()

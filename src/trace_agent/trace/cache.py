@@ -9,6 +9,7 @@ from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
+from trace_agent.database.trace_indexes import ensure_trace_indexes
 from trace_agent.models import (
     TraceCapability,
     TraceConversionRecord,
@@ -130,6 +131,7 @@ class TraceDatabaseCache:
             cached_database,
             database_path,
         )
+        ensure_trace_indexes(database_path)
         stdout_path = workspace / f"{role}-trace-streamer.stdout.log"
         stderr_path = workspace / f"{role}-trace-streamer.stderr.log"
         stdout_path.write_text(

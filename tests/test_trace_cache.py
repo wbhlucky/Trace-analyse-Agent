@@ -9,6 +9,8 @@ from trace_agent.models import AnalyzeRequest, ScenarioType
 from trace_agent.trace import HTraceAdapter
 from trace_agent.trace.trace_streamer import ProcessResult
 
+from sample_trace_schema import sample_trace_schema
+
 
 class CountingTraceStreamerRunner:
     def __init__(self) -> None:
@@ -27,13 +29,7 @@ class CountingTraceStreamerRunner:
         self.conversions += 1
         database_path = Path(command[-1])
         with sqlite3.connect(database_path) as connection:
-            connection.executescript(
-                """
-                CREATE TABLE process (id INTEGER, ipid INTEGER);
-                CREATE TABLE thread (id INTEGER, ipid INTEGER, itid INTEGER);
-                CREATE TABLE callstack (id INTEGER, callid INTEGER, ts INTEGER);
-                """
-            )
+            connection.executescript(sample_trace_schema())
         return ProcessResult(0, b"converted", b"")
 
 
