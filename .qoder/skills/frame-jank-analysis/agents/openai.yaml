@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frame Jank Analysis"
+  short_description: "Analyze slow frames, dropped frames, and jank"
+  default_prompt: "Use $frame-jank-analysis to investigate this frame performance problem."

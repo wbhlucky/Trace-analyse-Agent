@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>谛听 · DitingAgent 分析面板</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">谛</div>
+        <div class="brand-text">
+          <div class="brand-name">谛听 Agent</div>
+          <div class="brand-sub">Trace Analysis</div>
+        </div>
+      </div>
+
+      <div class="sidebar-tools">
+        <div class="search-box">
+          <input id="search" type="search" placeholder="搜索用例 / 场景 / 症状" autocomplete="off">
+        </div>
+                <button id="analyze-open" class="analyze-btn" title="发起新的分析">发起分析</button>        <button id="refresh" class="icon-btn" title="刷新列表">↻</button>
+      </div>
+
+      <div class="stats-line" id="stats-line"></div>
+
+      <nav class="case-list" id="case-list"></nav>
+
+      <footer class="sidebar-footer">
+        <span id="server-status" class="dot">连接中</span>
+        <span>本地分析面板</span>
+      </footer>
+    </aside>
+
+    <main class="main">
+      <div class="empty-state" id="empty-state">
+        <div class="empty-glow">谛</div>
+        <h1>选择一个分析用例</h1>
+        <p>左侧列出了 <code>results/</code> 目录下的分析结果。</p>
+      </div>
+
+      <div class="detail hidden" id="detail">
+        <header class="detail-header">
+          <div>
+            <div class="crumbs" id="crumbs"></div>
+            <h1 id="case-title">—</h1>
+            <p class="case-subtitle" id="case-subtitle"></p>
+          </div>
+          <div class="detail-actions">
+            <a id="open-report" class="button" target="_blank" rel="noopener" hidden>打开完整报告 ↗</a>
+          </div>
+        </header>
+
+        <section class="tabs" id="tabs">
+          <button class="tab active" data-tab="overview">概览</button>
+          <button class="tab" data-tab="findings">发现项</button>
+          <button class="tab" data-tab="evidence">证据</button>
+          <button class="tab" data-tab="run">运行信息</button>
+          <button class="tab" data-tab="json">原始数据</button>
+        </section>
+
+        <section class="tab-panel active" id="panel-overview"></section>
+        <section class="tab-panel" id="panel-findings"></section>
+        <section class="tab-panel" id="panel-evidence"></section>
+        <section class="tab-panel" id="panel-run"></section>
+        <section class="tab-panel" id="panel-json"></section>
+      </div>
+    </main>
+  </div>
+
+    <div class="modal-backdrop hidden" id="analyze-modal">
+    <div class="modal">
+      <div class="modal-head">
+        <div class="modal-title">发起新的分析</div>
+        <button class="modal-close" id="analyze-close" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <form id="analyze-form" autocomplete="off">
+          <div class="form-grid">
+            <label class="field span2">
+              <span>Trace 文件路径 *</span>
+              <input type="text" name="trace_path" required placeholder="例如 D:\traces\case.htrace">
+            </label>
+            <label class="field">
+              <span>问题类型 *</span>
+              <select name="scenario_type" required>
+                <option value="cold-start">冷启动</option>
+                <option value="response-latency">响应时延</option>
+                <option value="completion-latency">完成时延</option>
+                <option value="frame-jank">卡顿/丢帧</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Agent</span>
+              <select name="agent">
+                <option value="local">本地（无网络）</option>
+                <option value="qoder" selected>Qoder</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>场景描述 *</span>
+              <input type="text" name="scenario" required placeholder="例如：点击进入详情页">
+            </label>
+            <label class="field">
+              <span>问题现象 *</span>
+              <input type="text" name="symptom" required placeholder="例如：点击后约 2 秒页面才稳定">
+            </label>
+            <label class="field">
+              <span>Trace ID（可选）</span>
+              <input type="text" name="trace_id" placeholder="默认使用文件名">
+            </label>
+            <label class="field">
+              <span>问题时长 ms（可选）</span>
+              <input type="number" name="problem_duration_ms" min="0.001" step="any" placeholder="例如 2000">
+            </label>
+            <label class="field span2">
+              <details open>
+                <summary>高级参数</summary>
+                <div class="form-grid">
+                  <label class="field">
+                    <span>目标进程</span>
+                    <input type="text" name="target_process" placeholder="进程名提示">
+                  </label>
+                  <label class="field">
+                    <span>分析区间</span>
+                    <input type="text" name="time_range" placeholder="start_ns-end_ns">
+                  </label>
+                  <label class="field">
+                    <span>模型</span>
+                    <input type="text" name="model" placeholder="默认读取 .env">
+                  </label>
+                  <label class="field">
+                    <span>输出目录</span>
+                    <input type="text" name="output_dir" placeholder="默认 results/ 下自动命名">
+                  </label>
+                  <label class="field">
+                    <span>启动 Marker</span>
+                    <input type="text" name="start_marker">
+                  </label>
+                  <label class="field">
+                    <span>结束 Marker</span>
+                    <input type="text" name="end_marker">
+                  </label>
+                  <label class="field">
+                    <span>响应 Marker</span>
+                    <input type="text" name="response_marker">
+                  </label>
+                  <label class="field">
+                    <span>完成 Marker</span>
+                    <input type="text" name="completion_marker">
+                  </label>
+                </div>
+              </details>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="ghost" id="analyze-cancel">取消</button>
+            <button type="submit" class="primary" id="analyze-submit">开始分析</button>
+          </div>
+        </form>
+        <section class="jobs">
+          <div class="jobs-title" id="jobs-title">分析任务</div>
+          <div class="jobs-list" id="jobs-list"><div class="empty-note">暂无任务</div></div>
+        </section>
+      </div>
+    </div>
+  </div>
+<script src="/app.js"></script>
+</body>
+</html>

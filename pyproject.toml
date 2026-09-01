@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "diting-agent"
+version = "0.1.0"
+description = "DitingAgent: evidence-driven performance trace analysis"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jinja2>=3.1,<4",
+    "pydantic>=2.10,<3",
+    "rich>=13.9,<15",
+    "typer>=0.15,<1",
+]
+
+[project.optional-dependencies]
+qoder = [
+    "qoder-agent-sdk>=1.0.12",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<10",
+]
+
+[project.scripts]
+diting-agent = "trace_agent.cli:app"
+trace-agent = "trace_agent.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trace_agent"]
+
+[tool.hatch.build.targets.wheel.force-include]
+".qoder/skills" = "trace_agent/runtime_project/.qoder/skills"
+"vendor/trace_streamer" = "trace_agent/runtime_tools/trace_streamer"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

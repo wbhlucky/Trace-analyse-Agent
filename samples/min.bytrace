@@ -1,0 +1,10 @@
+TRACE:
+# tracer: nop
+#
+# entries-in-buffer/entries-written: 1/1   #P:4
+#
+#           TASK-PID    CPU#   TIMESTAMP  FUNCTION
+#              | |         |         |         |
+          <...>-1410  [001] 12345.100000: tracing_mark_write: B|1410|slice_one
+          <...>-1410  [001] 12345.200000: tracing_mark_write: E|1410|
+          <...>-1000  [001] 12345.300000: tracing_mark_write: B|1000|app_start

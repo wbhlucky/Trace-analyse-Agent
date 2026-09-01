@@ -1,0 +1,4 @@
+interface:
+  display_name: "Trace Analysis"
+  short_description: "Coordinate evidence-driven performance Trace analysis"
+  default_prompt: "Use $trace-analysis to coordinate this performance Trace investigation."

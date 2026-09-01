@@ -1,0 +1,4293 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{{ view.title }} · {{ request.trace_id }}</title>
+  <style>
+    :root {
+      --canvas: #f4f7fb;
+      --paper: #ffffff;
+      --paper-soft: #f9fbfd;
+      --ink: #102443;
+      --ink-strong: #081a36;
+      --muted: #60708a;
+      --faint: #8997ac;
+      --line: #d8e0ec;
+      --line-strong: #c4cfdd;
+      --blue: #1769e0;
+      --blue-soft: #eaf2ff;
+      --cyan: #0796aa;
+      --cyan-soft: #e8f8fa;
+      --teal: #087d78;
+      --green: #18815a;
+      --green-soft: #e8f6ef;
+      --orange: #e44c3b;
+      --orange-soft: #fff0ed;
+      --amber: #b8750b;
+      --amber-soft: #fff7e7;
+      --slate: #68778d;
+      --shadow: 0 14px 38px rgba(21, 43, 77, 0.08);
+      --label-width: 188px;
+      --radius: 14px;
+      --sans: "Segoe UI Variable", "MiSans", "PingFang SC",
+        "Microsoft YaHei", sans-serif;
+      --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      background: var(--canvas);
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(180deg, #fbfcff 0, var(--canvas) 460px);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    button, input { font: inherit; }
+
+    button:focus-visible,
+    summary:focus-visible {
+      outline: 3px solid rgba(23, 105, 224, 0.28);
+      outline-offset: 2px;
+    }
+
+    .page {
+      width: min(1580px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 22px 0 56px;
+    }
+
+    .masthead {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 2px 2px 18px;
+    }
+
+    .masthead h1 {
+      margin: 0;
+      color: var(--ink-strong);
+      font-size: clamp(26px, 3vw, 38px);
+      line-height: 1.1;
+      font-weight: 760;
+      letter-spacing: -0.035em;
+    }
+
+    .trace-name {
+      margin-top: 8px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    .masthead-side {
+      display: grid;
+      justify-items: end;
+      gap: 10px;
+      min-width: 320px;
+    }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: var(--paper);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 760;
+      letter-spacing: 0.06em;
+    }
+
+    .badge-blue {
+      border-color: rgba(23, 105, 224, 0.35);
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .badge-green {
+      border-color: rgba(24, 129, 90, 0.3);
+      background: var(--green-soft);
+      color: var(--green);
+    }
+
+    .meta-line {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+      text-align: right;
+    }
+
+    .stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.8fr) repeat(3, minmax(150px, 0.55fr));
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .conclusion {
+      padding: 22px 24px;
+      border-right: 1px solid var(--line);
+    }
+
+    .eyebrow {
+      margin-bottom: 8px;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 780;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .conclusion h2 {
+      max-width: 920px;
+      margin: 0;
+      color: var(--ink-strong);
+      font-size: clamp(20px, 2vw, 27px);
+      line-height: 1.35;
+      font-weight: 740;
+      letter-spacing: -0.025em;
+    }
+
+    .conclusion p {
+      max-width: 960px;
+      margin: 12px 0 0;
+      color: var(--muted);
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 9px;
+      border-radius: 6px;
+      background: var(--paper-soft);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 680;
+    }
+
+    .chip-good {
+      color: var(--green);
+      border-color: rgba(24, 129, 90, 0.25);
+      background: var(--green-soft);
+    }
+
+    .chip-warn {
+      color: var(--amber);
+      border-color: rgba(184, 117, 11, 0.25);
+      background: var(--amber-soft);
+    }
+
+    .metric {
+      display: grid;
+      align-content: center;
+      justify-items: center;
+      min-height: 172px;
+      padding: 18px 12px;
+      border-right: 1px solid var(--line);
+      text-align: center;
+    }
+
+    .metric:last-child { border-right: 0; }
+
+    .metric-label {
+      color: var(--muted);
+      font-weight: 660;
+    }
+
+    .metric-value {
+      margin-top: 10px;
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: clamp(29px, 3vw, 46px);
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: -0.05em;
+    }
+
+    .metric-value small {
+      margin-left: 3px;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    .metric-note {
+      margin-top: 12px;
+      color: var(--faint);
+      font-size: 12px;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 15px 18px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-head h2 {
+      margin: 0;
+      color: var(--ink-strong);
+      font-size: 17px;
+      line-height: 1.35;
+    }
+
+    .section-head p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .boundary-body {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) 44px minmax(220px, 1fr);
+      align-items: stretch;
+      gap: 12px;
+      padding: 14px 18px 18px;
+    }
+
+    .boundary-body.has-presentation {
+      grid-template-columns: minmax(200px, 1fr) 34px minmax(200px, 1fr) 34px minmax(200px, 1fr);
+    }
+
+    .boundary-card {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 12px;
+      min-height: 76px;
+      padding: 13px 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--paper-soft);
+    }
+
+    .boundary-icon {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: var(--blue-soft);
+      color: var(--blue);
+      font-size: 18px;
+      font-weight: 800;
+    }
+
+    .boundary-name {
+      color: var(--ink-strong);
+      font-weight: 740;
+    }
+
+    .boundary-source {
+      margin-top: 3px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+
+    .boundary-time {
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 16px;
+      font-weight: 720;
+      text-align: right;
+    }
+
+    .boundary-confidence {
+      margin-top: 3px;
+      color: var(--faint);
+      font-size: 11px;
+      text-align: right;
+    }
+
+    .boundary-arrow {
+      display: grid;
+      place-items: center;
+      color: var(--faint);
+      font-size: 24px;
+    }
+
+    .boundary-note {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      padding: 12px 14px;
+      border: 1px solid rgba(184, 117, 11, 0.25);
+      border-radius: 10px;
+      background: var(--amber-soft);
+      color: #76500f;
+      font-size: 12px;
+    }
+
+    .timeline-toolbar {
+      display: inline-flex;
+      gap: 6px;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper-soft);
+    }
+
+    .timeline-toolbar button {
+      padding: 5px 10px;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 680;
+    }
+
+    .timeline-toolbar button.active {
+      background: var(--paper);
+      color: var(--blue);
+      box-shadow: 0 1px 4px rgba(20, 43, 78, 0.12);
+    }
+
+    .timeline-toolbar .tool-divider {
+      width: 1px;
+      margin: 3px 2px;
+      background: var(--line-strong);
+    }
+
+    .depth-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 7px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 680;
+      white-space: nowrap;
+    }
+
+    .depth-control input {
+      width: 88px;
+      accent-color: var(--blue);
+      cursor: pointer;
+    }
+
+    .depth-control output {
+      min-width: 18px;
+      color: var(--blue);
+      font-family: var(--mono);
+      text-align: right;
+    }
+
+    .timeline-viewport {
+      position: relative;
+      overflow: hidden;
+      background: var(--paper);
+    }
+
+    .timeline-chart {
+      min-width: 0;
+      position: relative;
+    }
+
+    .trace-canvas {
+      display: block;
+      width: 100%;
+      outline: none;
+      cursor: crosshair;
+      touch-action: none;
+    }
+
+    .trace-canvas.is-panning { cursor: grabbing; }
+
+    .trace-tooltip {
+      position: absolute;
+      z-index: 12;
+      max-width: 340px;
+      padding: 8px 10px;
+      border: 1px solid rgba(28, 47, 77, 0.2);
+      border-radius: 7px;
+      background: rgba(18, 31, 51, 0.94);
+      box-shadow: 0 8px 24px rgba(11, 25, 45, 0.2);
+      color: #f5f8fc;
+      font-size: 11px;
+      line-height: 1.45;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    .trace-tooltip strong {
+      display: block;
+      max-width: 310px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .trace-tooltip span {
+      color: #b9c9dd;
+      font-family: var(--mono);
+    }
+
+    .timeline-status {
+      flex: 1;
+      color: var(--blue);
+      text-align: center;
+    }
+
+    .callstack-color-key {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+    }
+
+    .callstack-color-key i {
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      box-shadow: inset 0 0 0 1px rgba(19, 39, 67, 0.16);
+    }
+
+    .cpu-distribution {
+      display: grid;
+      grid-template-columns: 208px minmax(0, 1fr);
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: #f9fbfd;
+    }
+
+    .cpu-distribution-head {
+      display: grid;
+      align-content: center;
+      gap: 2px;
+      min-height: 58px;
+      padding: 9px 14px;
+      border-right: 1px solid var(--line);
+    }
+
+    .cpu-distribution-head strong {
+      color: #27374d;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .cpu-distribution-head span {
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 9px;
+    }
+
+    .cpu-distribution-body {
+      display: grid;
+      align-content: center;
+      gap: 8px;
+      min-width: 0;
+      padding: 9px 14px;
+    }
+
+    .cpu-distribution-bar {
+      display: flex;
+      height: 9px;
+      overflow: hidden;
+      border: 1px solid rgba(27, 49, 78, 0.14);
+      border-radius: 3px;
+      background: #e8edf3;
+    }
+
+    .cpu-distribution-segment {
+      min-width: 2px;
+      background: var(--cpu-color);
+      box-shadow: inset -1px 0 rgba(255, 255, 255, 0.45);
+    }
+
+    .cpu-core-list {
+      display: flex;
+      gap: 5px 10px;
+      overflow: hidden;
+      color: #526176;
+      font-family: var(--mono);
+      font-size: 9px;
+      white-space: nowrap;
+    }
+
+    .cpu-core-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .cpu-core-chip::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 2px;
+      background: var(--cpu-color);
+      box-shadow: inset 0 0 0 1px rgba(19, 39, 67, 0.14);
+      content: "";
+    }
+
+    .cpu-core-chip b {
+      color: #27374d;
+      font-weight: 700;
+    }
+
+    .timeline-axis {
+      display: grid;
+      grid-template-columns: var(--label-width) minmax(780px, 1fr);
+      min-height: 38px;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper-soft);
+    }
+
+    .timeline-axis-label {
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      border-right: 1px solid var(--line);
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .axis-track {
+      position: relative;
+      margin: 0 12px;
+    }
+
+    .axis-mark {
+      position: absolute;
+      top: 10px;
+      transform: translateX(-50%);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+
+    .axis-mark.is-start { transform: none; }
+    .axis-mark.is-end { transform: translateX(-100%); }
+
+    .timeline-body {
+      position: relative;
+      isolation: isolate;
+    }
+
+    .lane-row {
+      display: grid;
+      grid-template-columns: var(--label-width) minmax(780px, 1fr);
+      min-height: 38px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .lane-row:last-child { border-bottom: 0; }
+
+    .lane-label {
+      display: grid;
+      align-content: center;
+      gap: 1px;
+      padding: 7px 14px;
+      border-right: 1px solid var(--line);
+      background: var(--paper-soft);
+      overflow: hidden;
+    }
+
+    .lane-label strong {
+      overflow: hidden;
+      color: var(--ink);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .lane-label span {
+      overflow: hidden;
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 9px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .lane-track {
+      position: relative;
+      margin: 0 12px;
+      background-image:
+        linear-gradient(to right, rgba(24, 54, 95, 0.075) 1px, transparent 1px);
+      background-size: 10% 100%;
+    }
+
+    .trace-block {
+      position: absolute;
+      display: block;
+      height: 15px;
+      min-width: 3px;
+      padding: 0 6px;
+      overflow: hidden;
+      border: 1px solid rgba(23, 105, 224, 0.38);
+      border-radius: 4px;
+      background: #dceaff;
+      color: #154f9d;
+      cursor: pointer;
+      font-family: var(--sans);
+      font-size: 9px;
+      font-weight: 650;
+      line-height: 13px;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      transition: filter 120ms ease, transform 120ms ease;
+      z-index: 3;
+    }
+
+    .trace-block:hover {
+      filter: saturate(1.18) brightness(0.98);
+      transform: translateY(-1px);
+      z-index: 7;
+    }
+
+    .role-stage {
+      border-color: rgba(23, 105, 224, 0.3);
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .role-critical {
+      border-color: rgba(228, 76, 59, 0.55);
+      background: linear-gradient(90deg, #ff7968, var(--orange));
+      color: #fff;
+    }
+
+    .role-target {
+      border-color: rgba(23, 105, 224, 0.45);
+      background: #cfe2ff;
+      color: #124d9b;
+    }
+
+    .role-cross {
+      border-color: rgba(7, 150, 170, 0.45);
+      background: var(--cyan-soft);
+      color: #086d7b;
+    }
+
+    .role-system {
+      border-color: rgba(104, 119, 141, 0.35);
+      background: #edf1f6;
+      color: #56657a;
+    }
+
+    .role-frame-actual,
+    .role-frame-expected {
+      border-color: rgba(7, 150, 170, 0.45);
+      background: #d8f5f7;
+      color: #08707c;
+    }
+
+    .role-frame-expected {
+      border-style: dashed;
+      background: #f3fbfc;
+    }
+
+    .role-render-frame {
+      border-color: rgba(8, 125, 120, 0.55);
+      background: var(--teal);
+      color: #fff;
+    }
+
+    .role-state-running {
+      border-color: rgba(24, 129, 90, 0.4);
+      background: #bfe7d1;
+      color: #176b4c;
+    }
+
+    .role-state-runnable {
+      border-color: rgba(184, 117, 11, 0.45);
+      background: #ffe2a7;
+      color: #825508;
+    }
+
+    .role-state-sleep {
+      border-color: rgba(104, 119, 141, 0.45);
+      background: #dce3ec;
+      color: #526176;
+    }
+
+    .role-state-blocked {
+      border-color: rgba(228, 76, 59, 0.4);
+      background: #ffd2cc;
+      color: #9f3024;
+    }
+
+    .role-state-other {
+      border-color: var(--line-strong);
+      background: #eef1f5;
+      color: var(--slate);
+    }
+
+    .boundary-pin {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 0;
+      border-left: 1px dashed rgba(23, 105, 224, 0.72);
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    .boundary-pin span {
+      position: absolute;
+      top: -25px;
+      left: 0;
+      transform: translateX(-50%);
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: var(--blue);
+      color: #fff;
+      font-size: 9px;
+      font-weight: 720;
+      white-space: nowrap;
+    }
+
+    .boundary-pin.is-start span {
+      left: 3px;
+      transform: none;
+    }
+
+    .boundary-pin.is-end span {
+      left: auto;
+      right: 3px;
+      transform: none;
+    }
+
+    .link-layer {
+      position: absolute;
+      inset: 0 12px 0 calc(var(--label-width) + 12px);
+      width: auto;
+      height: 100%;
+      overflow: visible;
+      pointer-events: none;
+      z-index: 6;
+    }
+
+    .link-layer path {
+      fill: none;
+      stroke: rgba(7, 150, 170, 0.72);
+      stroke-width: 1.5;
+      stroke-dasharray: 3 2;
+    }
+
+    .timeline-empty {
+      padding: 28px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .timeline-footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 10px 18px;
+      border-top: 1px solid var(--line);
+      background: var(--paper-soft);
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .diagnostic-grid {
+      display: grid;
+      grid-template-columns: minmax(320px, 0.85fr) minmax(500px, 1.15fr);
+      gap: 14px;
+    }
+
+    .card-body { padding: 16px 18px 18px; }
+
+    .stage-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .stage-row {
+      display: grid;
+      grid-template-columns: minmax(150px, 0.7fr) minmax(180px, 1.5fr) 76px;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .stage-name {
+      overflow: hidden;
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 650;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .stage-bar {
+      height: 16px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #f0f3f7;
+      overflow: hidden;
+    }
+
+    .stage-fill {
+      height: 100%;
+      min-width: 2px;
+      border-radius: 3px;
+      background: var(--blue);
+    }
+
+    .stage-fill.critical {
+      background: var(--orange);
+    }
+
+    .stage-duration {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      text-align: right;
+    }
+
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(100px, 1fr));
+      gap: 9px;
+    }
+
+    .kpi {
+      padding: 10px 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper-soft);
+    }
+
+    .kpi-label {
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .kpi-value {
+      margin-top: 4px;
+      color: var(--ink-strong);
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 720;
+    }
+
+    .kpi-value.green { color: var(--green); }
+    .kpi-value.amber { color: var(--amber); }
+
+    .assessment {
+      margin-top: 12px;
+      padding: 11px 12px;
+      border-left: 3px solid var(--blue);
+      background: var(--blue-soft);
+      color: #294d7c;
+      font-size: 12px;
+    }
+
+    .findings {
+      display: grid;
+      gap: 10px;
+      padding: 14px 18px 18px;
+    }
+
+    .finding {
+      display: grid;
+      grid-template-columns: 8px minmax(180px, 0.65fr) minmax(320px, 1.35fr);
+      gap: 14px;
+      padding: 13px 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--paper-soft);
+    }
+
+    .finding-mark {
+      border-radius: 999px;
+      background: var(--blue);
+    }
+
+    .finding-mark.high,
+    .finding-mark.critical { background: var(--orange); }
+    .finding-mark.medium { background: var(--amber); }
+
+    .finding h3 {
+      margin: 0;
+      color: var(--ink-strong);
+      font-size: 14px;
+    }
+
+    .finding-meta {
+      margin-top: 5px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .finding p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .finding-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .finding-actions div {
+      padding: 8px 9px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--paper);
+    }
+
+    .finding-actions strong {
+      display: block;
+      margin-bottom: 3px;
+      color: var(--ink);
+      font-size: 10px;
+    }
+
+    .table-wrap { overflow-x: auto; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--paper-soft);
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 760;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    tbody tr:last-child td { border-bottom: 0; }
+
+    .mono {
+      font-family: var(--mono);
+      overflow-wrap: anywhere;
+    }
+
+    .evidence-button {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--blue);
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 680;
+    }
+
+    .perf-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 10px;
+      padding: 14px 18px 4px;
+    }
+
+    .perf-copy {
+      padding: 12px 18px 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .perf-diagnosis-card {
+      margin: 0 18px 18px;
+      padding: 16px;
+      border: 1px solid rgba(202, 99, 55, 0.24);
+      border-left: 4px solid var(--orange);
+      border-radius: 10px;
+      background:
+        linear-gradient(135deg, rgba(255, 247, 240, 0.98), #fff 62%);
+    }
+
+    .perf-diagnosis-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 13px;
+    }
+
+    .perf-diagnosis-head h3 {
+      margin: 0;
+      color: var(--ink-strong);
+      font-size: 15px;
+    }
+
+    .perf-diagnosis-head p {
+      max-width: 880px;
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .perf-diagnosis-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 9px;
+      margin-bottom: 12px;
+    }
+
+    .perf-diagnosis-fact {
+      min-width: 0;
+      padding: 10px 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.78);
+    }
+
+    .perf-diagnosis-fact small {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 8px;
+      font-weight: 760;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .perf-diagnosis-fact strong {
+      display: block;
+      overflow: hidden;
+      color: var(--ink);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .perf-diagnosis-fact span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 9px;
+      line-height: 1.5;
+    }
+
+    .perf-anchor-chain {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 7px;
+      margin: 10px 0 12px;
+    }
+
+    .perf-anchor {
+      position: relative;
+      min-width: 0;
+      padding: 9px 10px 9px 28px;
+      border: 1px solid rgba(34, 124, 157, 0.15);
+      border-radius: 7px;
+      background: rgba(240, 248, 251, 0.76);
+    }
+
+    .perf-anchor-index {
+      position: absolute;
+      top: 9px;
+      left: 9px;
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 800;
+    }
+
+    .perf-anchor strong {
+      display: block;
+      overflow: hidden;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 9px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .perf-anchor span {
+      display: block;
+      margin-top: 4px;
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 9px;
+    }
+
+    .perf-diagnosis-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 9px;
+    }
+
+    .perf-diagnosis-actions > div {
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+    }
+
+    .perf-diagnosis-actions strong {
+      display: block;
+      margin-bottom: 3px;
+      color: var(--ink);
+      font-size: 10px;
+    }
+
+    .perf-diagnosis-actions p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .perf-raw-details {
+      margin: 0 18px 18px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #fff;
+    }
+
+    .perf-raw-details summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 11px 13px;
+      background: var(--paper-soft);
+      color: var(--ink);
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 720;
+      list-style: none;
+    }
+
+    .perf-raw-details summary::-webkit-details-marker { display: none; }
+    .perf-raw-details summary::after {
+      content: "展开取证明细";
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+    }
+    .perf-raw-details[open] summary::after { content: "收起取证明细"; }
+
+    .perf-visual-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr);
+      gap: 12px;
+      padding: 0 18px 18px;
+    }
+
+    .perf-chart-card {
+      min-width: 0;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background:
+        linear-gradient(180deg, rgba(247, 250, 255, 0.9), #fff 68%);
+    }
+
+    .perf-chart-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .perf-chart-head h3 {
+      margin: 0;
+      color: var(--ink-strong);
+      font-size: 13px;
+      letter-spacing: -0.01em;
+    }
+
+    .perf-chart-head p {
+      margin: 3px 0 0;
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 9px;
+      line-height: 1.45;
+    }
+
+    .perf-chart-tag {
+      flex: 0 0 auto;
+      padding: 4px 7px;
+      border: 1px solid rgba(34, 124, 157, 0.2);
+      border-radius: 999px;
+      background: rgba(34, 124, 157, 0.07);
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 760;
+    }
+
+    .perf-hotspot-chart {
+      display: grid;
+      gap: 9px;
+    }
+
+    .perf-hotspot-row {
+      display: grid;
+      grid-template-columns: minmax(150px, 0.9fr) minmax(150px, 1.5fr) 54px;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .perf-symbol {
+      overflow: hidden;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 9px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .perf-bar-track {
+      position: relative;
+      height: 12px;
+      overflow: hidden;
+      border: 1px solid rgba(34, 124, 157, 0.12);
+      border-radius: 3px;
+      background:
+        repeating-linear-gradient(
+          90deg,
+          rgba(34, 124, 157, 0.04) 0,
+          rgba(34, 124, 157, 0.04) calc(10% - 1px),
+          rgba(34, 124, 157, 0.12) calc(10% - 1px),
+          rgba(34, 124, 157, 0.12) 10%
+        );
+    }
+
+    .perf-bar-inclusive,
+    .perf-bar-self {
+      position: absolute;
+      inset: 0 auto 0 0;
+      border-radius: 2px;
+    }
+
+    .perf-bar-inclusive {
+      background: linear-gradient(90deg, #57b8b0, #227c9d);
+      opacity: 0.82;
+    }
+
+    .perf-bar-self {
+      top: 3px;
+      bottom: 3px;
+      min-width: 0;
+      background: #073b4c;
+      opacity: 0.9;
+    }
+
+    .perf-bar-value {
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 760;
+      text-align: right;
+    }
+
+    .perf-thread-rail {
+      display: flex;
+      width: 100%;
+      height: 24px;
+      margin: 3px 0 14px;
+      overflow: hidden;
+      border-radius: 5px;
+      background: var(--paper-soft);
+      box-shadow: inset 0 0 0 1px var(--line);
+    }
+
+    .perf-thread-segment {
+      position: relative;
+      min-width: 2px;
+      height: 100%;
+      box-shadow: inset -1px 0 rgba(255, 255, 255, 0.75);
+    }
+
+    .perf-thread-segment::after {
+      content: "";
+      position: absolute;
+      inset: 4px 0;
+      border-left: 1px solid rgba(255,255,255,0.42);
+    }
+
+    .perf-thread-list {
+      display: grid;
+      gap: 7px;
+    }
+
+    .perf-thread-row {
+      display: grid;
+      grid-template-columns: 8px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .perf-thread-row strong {
+      overflow: hidden;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 650;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .perf-thread-note {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .perf-thread-swatch {
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+    }
+
+    .thread-color-0 { background: #176b87; }
+    .thread-color-1 { background: #1b998b; }
+    .thread-color-2 { background: #57a773; }
+    .thread-color-3 { background: #8cad3a; }
+    .thread-color-4 { background: #c5962e; }
+    .thread-color-5 { background: #d46f4c; }
+    .thread-color-6 { background: #b85c86; }
+    .thread-color-7 { background: #8064a2; }
+    .thread-color-8 { background: #8c99a5; }
+
+    .perf-module-card {
+      margin: 0 18px 18px;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background:
+        linear-gradient(180deg, rgba(247, 250, 255, 0.9), #fff 68%);
+    }
+
+    .perf-module-table {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .perf-module-row {
+      display: grid;
+      grid-template-columns:
+        38px minmax(180px, 1.4fr) minmax(130px, 0.8fr)
+        82px minmax(180px, 1fr);
+      align-items: center;
+      min-width: 760px;
+      min-height: 42px;
+      border-top: 1px solid #edf1f7;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .perf-module-row:first-child { border-top: 0; }
+
+    [data-startup-module-row][hidden] {
+      display: none !important;
+    }
+
+    .perf-module-row > span,
+    .perf-module-row > div {
+      min-width: 0;
+      padding: 8px 10px;
+    }
+
+    .perf-module-head {
+      min-height: 30px;
+      border-top: 0;
+      background: #f5f8fc;
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 8px;
+      font-weight: 750;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .perf-module-rank {
+      color: #176b87;
+      font-family: var(--mono);
+      font-weight: 780;
+      text-align: center;
+    }
+
+    .perf-module-name strong,
+    .perf-module-symbol {
+      display: block;
+      overflow: hidden;
+      color: var(--ink);
+      font-family: var(--mono);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .perf-module-name small {
+      display: block;
+      margin-top: 2px;
+      overflow: hidden;
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 8px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .perf-module-weight strong {
+      color: var(--ink-strong);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .perf-module-weight-track {
+      height: 3px;
+      margin-top: 5px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #e8eef5;
+    }
+
+    .perf-module-weight-track span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #176b87, #1b998b);
+    }
+
+    .perf-module-pager {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 10px;
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 9px;
+    }
+
+    .perf-module-page-button {
+      min-height: 26px;
+      padding: 4px 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: #176b87;
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 720;
+    }
+
+    .perf-module-page-button:disabled {
+      cursor: default;
+      opacity: 0.38;
+    }
+
+    .perf-flame-card {
+      margin: 0 18px 18px;
+      padding: 15px;
+      border: 1px solid rgba(202, 99, 55, 0.22);
+      border-radius: 10px;
+      background:
+        linear-gradient(180deg, rgba(255, 249, 244, 0.92), #fff 56%);
+    }
+
+    .perf-flame-tools {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .perf-flame-button {
+      min-height: 28px;
+      padding: 5px 9px;
+      border: 1px solid rgba(202, 99, 55, 0.22);
+      border-radius: 6px;
+      background: rgba(255,255,255,0.85);
+      color: #8f3e25;
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 720;
+    }
+
+    .perf-flame-button:hover { background: #fff2e8; }
+    .perf-flame-button.active {
+      border-color: rgba(172, 69, 36, 0.72);
+      background: #9f4328;
+      color: #fff;
+      box-shadow: 0 3px 9px rgba(117, 51, 31, 0.16);
+    }
+    .perf-flame-button:focus-visible {
+      outline: 2px solid #d46f4c;
+      outline-offset: 2px;
+    }
+
+    .perf-flame-path {
+      min-width: 0;
+      margin: -5px 0 9px;
+      overflow: hidden;
+      color: #9a5d47;
+      font-family: var(--mono);
+      font-size: 9px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .perf-flame-shell {
+      position: relative;
+      height: clamp(360px, 68vh, 680px);
+      min-height: 260px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-color: rgba(202, 99, 55, 0.48) #fff6ef;
+      scrollbar-gutter: stable;
+      scrollbar-width: thin;
+      border: 1px solid rgba(202, 99, 55, 0.16);
+      border-radius: 7px;
+      background:
+        linear-gradient(180deg, #fffaf6, #fff),
+        repeating-linear-gradient(
+          0deg,
+          transparent 0,
+          transparent 23px,
+          rgba(202, 99, 55, 0.05) 23px,
+          rgba(202, 99, 55, 0.05) 24px
+        );
+    }
+
+    .perf-flame-shell::-webkit-scrollbar { width: 9px; }
+    .perf-flame-shell::-webkit-scrollbar-track { background: #fff6ef; }
+    .perf-flame-shell::-webkit-scrollbar-thumb {
+      border: 2px solid #fff6ef;
+      border-radius: 999px;
+      background: rgba(202, 99, 55, 0.48);
+    }
+
+    .perf-flame-canvas {
+      display: block;
+      width: 100%;
+      min-height: 260px;
+      cursor: crosshair;
+    }
+
+    .perf-flame-canvas:focus-visible {
+      outline: 2px solid #d46f4c;
+      outline-offset: -2px;
+    }
+
+    .perf-flame-tooltip {
+      position: fixed;
+      z-index: 50;
+      display: none;
+      max-width: min(520px, 80vw);
+      padding: 8px 10px;
+      border: 1px solid rgba(117, 51, 31, 0.24);
+      border-radius: 7px;
+      background: rgba(43, 22, 16, 0.94);
+      box-shadow: 0 10px 28px rgba(43, 22, 16, 0.2);
+      color: #fff8f2;
+      font-family: var(--mono);
+      font-size: 9px;
+      line-height: 1.5;
+      pointer-events: none;
+    }
+
+    .perf-flame-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 9px;
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 9px;
+    }
+
+    .perf-thread-state-card {
+      margin-top: 16px;
+      padding-top: 15px;
+      border-top: 1px solid rgba(202, 99, 55, 0.18);
+    }
+
+    .perf-thread-state-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+
+    .perf-thread-state-head h4 {
+      margin: 0 0 4px;
+      color: #6f321f;
+      font-size: 13px;
+    }
+
+    .perf-thread-state-head p,
+    .perf-thread-state-note {
+      margin: 0;
+      color: var(--faint);
+      font-size: 10px;
+      line-height: 1.55;
+    }
+
+    .perf-state-comparison {
+      display: grid;
+      gap: 10px;
+    }
+
+    .perf-state-comparison-row {
+      display: grid;
+      grid-template-columns: minmax(150px, 0.75fr) minmax(320px, 2.4fr) minmax(170px, 1fr);
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .perf-state-thread-label {
+      min-width: 0;
+    }
+
+    .perf-state-thread-label strong,
+    .perf-state-thread-label span {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .perf-state-thread-label strong {
+      color: #543224;
+      font-size: 10px;
+    }
+
+    .perf-state-thread-label span {
+      margin-top: 2px;
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 8px;
+    }
+
+    .perf-state-bar {
+      display: flex;
+      width: 100%;
+      height: 18px;
+      overflow: hidden;
+      border: 1px solid rgba(91, 68, 56, 0.14);
+      border-radius: 5px;
+      background: #edf1f1;
+    }
+
+    .perf-state-bar.large { height: 24px; }
+
+    .perf-state-segment {
+      min-width: 0;
+      height: 100%;
+    }
+
+    .perf-state-verdict {
+      overflow: hidden;
+      color: #725140;
+      font-size: 9px;
+      line-height: 1.4;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .perf-state-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px 14px;
+      margin-top: 10px;
+    }
+
+    .perf-state-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #65483a;
+      font-family: var(--mono);
+      font-size: 9px;
+    }
+
+    .perf-state-legend-item i {
+      width: 9px;
+      height: 9px;
+      flex: 0 0 auto;
+      border-radius: 2px;
+      box-shadow: inset 0 0 0 1px rgba(42, 34, 30, 0.08);
+    }
+
+    .perf-state-kpis {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .perf-state-kpi {
+      padding: 9px 10px;
+      border: 1px solid rgba(202, 99, 55, 0.14);
+      border-radius: 7px;
+      background: rgba(255, 252, 249, 0.9);
+    }
+
+    .perf-state-kpi small,
+    .perf-state-kpi strong,
+    .perf-state-kpi span {
+      display: block;
+    }
+
+    .perf-state-kpi small {
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 8px;
+      text-transform: uppercase;
+    }
+
+    .perf-state-kpi strong {
+      margin-top: 4px;
+      color: #593122;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .perf-state-kpi span {
+      margin-top: 3px;
+      color: var(--faint);
+      font-size: 9px;
+    }
+
+    .perf-state-cpus {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .perf-state-cpu {
+      padding: 4px 7px;
+      border-radius: 999px;
+      background: #eef7f5;
+      color: #26665b;
+      font-family: var(--mono);
+      font-size: 8px;
+    }
+
+    .perf-state-assessment {
+      margin-top: 10px;
+      padding: 9px 11px;
+      border-left: 3px solid #c76542;
+      background: rgba(255, 245, 237, 0.74);
+      color: #6b4030;
+      font-size: 10px;
+      line-height: 1.55;
+    }
+
+    @media (max-width: 880px) {
+      .perf-state-comparison-row {
+        grid-template-columns: minmax(120px, 0.8fr) minmax(220px, 2fr);
+      }
+      .perf-state-verdict { display: none; }
+      .perf-state-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    .limitations {
+      display: grid;
+      gap: 8px;
+      padding: 14px 18px 18px;
+    }
+
+    .limitation {
+      display: flex;
+      gap: 9px;
+      padding: 9px 11px;
+      border: 1px solid rgba(184, 117, 11, 0.2);
+      border-radius: 8px;
+      background: var(--amber-soft);
+      color: #76500f;
+      font-size: 12px;
+    }
+
+    .page-footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 18px 2px 0;
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      background: rgba(8, 26, 54, 0.2);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 150ms ease;
+    }
+
+    .drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      z-index: 41;
+      width: min(520px, 96vw);
+      height: 100vh;
+      padding: 20px;
+      border-left: 1px solid var(--line);
+      background: var(--paper);
+      box-shadow: -18px 0 50px rgba(8, 26, 54, 0.18);
+      transform: translateX(102%);
+      transition: transform 170ms ease;
+      overflow-y: auto;
+    }
+
+    body.drawer-open .drawer { transform: translateX(0); }
+    body.drawer-open .drawer-backdrop {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .drawer-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .drawer h2 {
+      margin: 0;
+      color: var(--ink-strong);
+      font-size: 18px;
+    }
+
+    .drawer-close {
+      width: 32px;
+      height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--paper-soft);
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .drawer-summary {
+      margin-top: 12px;
+      color: var(--muted);
+    }
+
+    .drawer-grid {
+      display: grid;
+      grid-template-columns: minmax(100px, 0.45fr) minmax(0, 1fr);
+      gap: 0;
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      overflow: hidden;
+    }
+
+    .drawer-grid dt,
+    .drawer-grid dd {
+      margin: 0;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      overflow-wrap: anywhere;
+      font-size: 11px;
+    }
+
+    .drawer-grid dt {
+      background: var(--paper-soft);
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+
+    .drawer-grid dd {
+      color: var(--ink);
+      font-family: var(--mono);
+      white-space: pre-wrap;
+    }
+
+    .drawer-grid dt:last-of-type,
+    .drawer-grid dd:last-of-type { border-bottom: 0; }
+
+    @media (max-width: 1120px) {
+      .hero-grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
+      .conclusion {
+        grid-column: 1 / -1;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .boundary-body {
+        grid-template-columns: 1fr 34px 1fr;
+      }
+      .boundary-body.has-presentation {
+        grid-template-columns: 1fr 28px 1fr 28px 1fr;
+      }
+      .boundary-note { grid-column: 1 / -1; }
+      .diagnostic-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 760px) {
+      :root { --label-width: 132px; }
+      .page { width: min(100% - 20px, 1580px); }
+      .masthead { display: grid; }
+      .masthead-side {
+        justify-items: start;
+        min-width: 0;
+      }
+      .badges { justify-content: flex-start; }
+      .meta-line { text-align: left; }
+      .hero-grid { grid-template-columns: 1fr; }
+      .conclusion { grid-column: auto; }
+      .metric {
+        min-height: 120px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .boundary-body,
+      .boundary-body.has-presentation { grid-template-columns: 1fr; }
+      .boundary-arrow { transform: rotate(90deg); }
+      .kpi-row,
+      .perf-summary { grid-template-columns: 1fr 1fr; }
+      .perf-visual-grid { grid-template-columns: 1fr; }
+      .perf-diagnosis-grid,
+      .perf-anchor-chain,
+      .perf-diagnosis-actions { grid-template-columns: 1fr; }
+      .perf-hotspot-row {
+        grid-template-columns: minmax(110px, 0.8fr) minmax(120px, 1.2fr) 50px;
+      }
+      .finding { grid-template-columns: 7px 1fr; }
+      .finding > div:last-child { grid-column: 2; }
+      .finding-actions { grid-template-columns: 1fr; }
+      .page-footer { display: grid; }
+      .cpu-core-list { flex-wrap: wrap; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      .page { width: 100%; padding: 0; }
+      .panel, .hero-grid { box-shadow: none; break-inside: avoid; }
+      .timeline-toolbar, .perf-flame-tools, .perf-module-pager,
+      .drawer, .drawer-backdrop { display: none; }
+      .timeline-viewport { overflow: visible; }
+      .timeline-chart { min-width: 0; }
+      .perf-flame-shell {
+        height: auto;
+        overflow: visible;
+      }
+      [data-startup-module-row][hidden] { display: grid !important; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="masthead">
+      <div>
+        <h1>{{ view.title }}</h1>
+        <div class="trace-name">{{ request.trace_id }} · {{ view.trace_name }}</div>
+      </div>
+      <div class="masthead-side">
+        <div class="badges">
+          <span class="badge badge-blue">{{ view.scenario_code }}</span>
+          <span class="badge badge-green">证据驱动</span>
+          {% if analysis.cold_start %}
+          <span class="badge">
+            {{ "冷启动已证明" if analysis.cold_start.cold_start_proven else "冷启动待确认" }}
+          </span>
+          {% endif %}
+        </div>
+        <div class="meta-line">
+          {% if analysis.cold_start %}
+          PID {{ analysis.cold_start.resolved_process.pid }}
+          / IPID {{ analysis.cold_start.resolved_process.ipid }} ·
+          {% endif %}
+          {{ view.generated_at }}
+        </div>
+      </div>
+    </header>
+
+    <div class="stack">
+      <section class="hero-grid" aria-labelledby="report-summary">
+        <div class="conclusion">
+          <div class="eyebrow">核心结论</div>
+          <h2 id="report-summary">{{ analysis.summary }}</h2>
+          {% if analysis.cold_start %}
+          <p>{{ analysis.cold_start.critical_path_summary }}</p>
+          <div class="chip-row">
+            <span class="chip {{ 'chip-good' if analysis.cold_start.cold_start_proven else 'chip-warn' }}">
+              {{ "已证明冷启动" if analysis.cold_start.cold_start_proven else "冷启动证据不足" }}
+            </span>
+            <span class="chip chip-good">{{ view.cold.confidence_label }}</span>
+            <span class="chip">{{ view.cold.evidence_count }} 条关联证据</span>
+          </div>
+          {% else %}
+          <p>{{ request.scenario }} · {{ request.symptom }}</p>
+          <div class="chip-row">
+            <span class="chip">{{ analysis.findings|length }} 条发现</span>
+            <span class="chip">{{ evidence|length }} 条证据</span>
+          </div>
+          {% endif %}
+        </div>
+
+        {% if analysis.cold_start %}
+        <div class="metric">
+          <div class="metric-label">{{ view.cold.metric_label }}</div>
+          <div class="metric-value">{{ "%.2f"|format(analysis.cold_start.total_duration_ms / 1000) }}<small>s</small></div>
+          <div class="metric-note">{{ view.cold.metric_note }}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">屏幕呈现完成</div>
+          <div class="metric-value">
+            {% if view.cold.presentation_duration_ms is not none %}
+            {{ "%.2f"|format(view.cold.presentation_duration_ms / 1000) }}<small>s</small>
+            {% else %}
+            —<small>n/a</small>
+            {% endif %}
+          </div>
+          <div class="metric-note">
+            启动边界 → mapped RS frame end
+          </div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">边界置信度</div>
+          <div class="metric-value">{{ "%.2f"|format(view.cold.boundary_confidence) }}</div>
+          <div class="metric-note">{{ view.cold.confidence_label }}</div>
+        </div>
+        {% else %}
+        <div class="metric">
+          <div class="metric-label">发现</div>
+          <div class="metric-value">{{ analysis.findings|length }}</div>
+          <div class="metric-note">观察与根因候选</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">证据</div>
+          <div class="metric-value">{{ evidence|length }}</div>
+          <div class="metric-note">可追溯工具记录</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">限制</div>
+          <div class="metric-value">{{ analysis.limitations|length }}</div>
+          <div class="metric-note">采集或判断缺口</div>
+        </div>
+        {% endif %}
+      </section>
+
+      {% if analysis.cold_start %}
+      <section class="panel" aria-labelledby="boundary-title">
+        <div class="section-head">
+          <div>
+            <h2 id="boundary-title">边界判定</h2>
+            <p>边界由 Agent 选择；来源、证据和置信度保持可追溯。</p>
+          </div>
+        </div>
+        <div class="boundary-body{{ ' has-presentation' if analysis.cold_start.presentation_boundary else '' }}">
+          <div class="boundary-card">
+            <div class="boundary-icon">▶</div>
+            <div>
+              <div class="boundary-name">{{ analysis.cold_start.start_boundary.name }}</div>
+              <div class="boundary-source">
+                {{ analysis.cold_start.start_boundary.source }}
+                {% if analysis.cold_start.start_boundary.source_id %}
+                · {{ analysis.cold_start.start_boundary.source_id }}
+                {% endif %}
+              </div>
+            </div>
+            <div>
+              <div class="boundary-time">+0.000 ms</div>
+              <div class="boundary-confidence">confidence {{ "%.2f"|format(analysis.cold_start.start_boundary.confidence) }}</div>
+            </div>
+          </div>
+          <div class="boundary-arrow">→</div>
+          <div class="boundary-card">
+            <div class="boundary-icon">⚑</div>
+            <div>
+              <div class="boundary-name">{{ analysis.cold_start.end_boundary.name }}</div>
+              <div class="boundary-source">
+                {{ analysis.cold_start.end_boundary.source }}
+                {% if analysis.cold_start.end_boundary.source_id %}
+                · {{ analysis.cold_start.end_boundary.source_id }}
+                {% endif %}
+              </div>
+            </div>
+            <div>
+              <div class="boundary-time">+{{ "%.3f"|format(analysis.cold_start.total_duration_ms) }} ms</div>
+              <div class="boundary-confidence">confidence {{ "%.2f"|format(analysis.cold_start.end_boundary.confidence) }}</div>
+            </div>
+          </div>
+          {% if analysis.cold_start.presentation_boundary %}
+          <div class="boundary-arrow">→</div>
+          <div class="boundary-card">
+            <div class="boundary-icon">▣</div>
+            <div>
+              <div class="boundary-name">{{ analysis.cold_start.presentation_boundary.name }}</div>
+              <div class="boundary-source">
+                {{ analysis.cold_start.presentation_boundary.source }}
+                {% if analysis.cold_start.presentation_boundary.source_id %}
+                · {{ analysis.cold_start.presentation_boundary.source_id }}
+                {% endif %}
+              </div>
+            </div>
+            <div>
+              <div class="boundary-time">+{{ "%.3f"|format(analysis.cold_start.presentation_duration_ms) }} ms</div>
+              <div class="boundary-confidence">confidence {{ "%.2f"|format(analysis.cold_start.presentation_boundary.confidence) }}</div>
+            </div>
+          </div>
+          {% endif %}
+          <div class="boundary-note">
+            {{ analysis.cold_start.classification_reason }}
+          </div>
+        </div>
+      </section>
+      {% endif %}
+
+      {% if view.frame.available %}
+      <section class="panel" aria-labelledby="frame-rate-title">
+        <div class="section-head">
+          <div>
+            <h2 id="frame-rate-title">帧率与帧质量</h2>
+            <p>主帧率按完整问题区间计算；活动簇产帧率与最终呈现帧率作为独立辅助指标。</p>
+          </div>
+          <span class="perf-chart-tag">
+            source {{ view.frame.source_evidence_id }}
+          </span>
+        </div>
+        <div class="card-body">
+          <div class="kpi-row">
+            <div class="kpi">
+              <div class="kpi-label">问题区间帧率</div>
+              <div class="kpi-value amber">
+                {% if view.frame.problem_interval_fps is not none %}
+                {{ "%.1f"|format(view.frame.problem_interval_fps) }}<small>FPS</small>
+                {% else %}
+                n/a
+                {% endif %}
+              </div>
+              <div class="metric-note">
+                {{ view.frame.problem_interval_frame_count }} 帧 / {{ "%.2f"|format(view.frame.problem_interval_duration_ms / 1000) }} 秒
+                · {{ view.frame.problem_interval_source_label }}
+              </div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">最终呈现 FPS</div>
+              <div class="kpi-value {{ 'green' if view.frame.presentation_fps_available else '' }}">
+                {% if view.frame.presentation_fps_available %}
+                {{ "%.1f"|format(view.frame.effective_presentation_fps) }}
+                {% else %}
+                n/a
+                {% endif %}
+              </div>
+              <div class="metric-note">
+                {{ view.frame.mapped_presented_frames }} mapped frames
+              </div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">{{ view.frame.application_fps_label }}</div>
+              <div class="kpi-value">
+                {% if view.frame.application_production_fps is not none %}
+                {{ "%.1f"|format(view.frame.application_production_fps) }}
+                {% else %}
+                n/a
+                {% endif %}
+              </div>
+              <div class="metric-note">辅助指标，仅按连续产帧活动簇计算</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">刷新率 / 单帧预算</div>
+              <div class="kpi-value">
+                {% if view.frame.refresh_rate_hz is not none and view.frame.frame_budget_ms is not none %}
+                {{ "%.1f"|format(view.frame.refresh_rate_hz) }}<small>Hz / {{ "%.2f"|format(view.frame.frame_budget_ms) }} ms</small>
+                {% else %}
+                n/a
+                {% endif %}
+              </div>
+              <div class="metric-note">帧预算 = 1000 / refresh rate</div>
+            </div>
+          </div>
+          <div class="kpi-row">
+            <div class="kpi">
+              <div class="kpi-label">RS Actual / Expected</div>
+              <div class="kpi-value">
+                {{ view.frame.render_service_actual_frames }}<small>/{{ view.frame.render_service_expected_frames }}</small>
+              </div>
+              <div class="metric-note">
+                {{ view.frame.render_service_dropped_frame_candidates }} 个 RS 候选丢帧
+              </div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">应用包装层 Jank / 候选丢帧</div>
+              <div class="kpi-value amber">
+                {{ view.frame.jank_frames }}<small>/{{ view.frame.dropped_frame_candidates }}</small>
+              </div>
+              <div class="metric-note">jank rate {{ "%.1f"|format(view.frame.jank_rate * 100) }}%</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">应用包装层 Missed VSync</div>
+              <div class="kpi-value">{{ view.frame.total_missed_vsyncs }}</div>
+              <div class="metric-note">仅限已选产帧管线</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">应用 frame_slice P95 / Max</div>
+              <div class="kpi-value">
+                {% if view.frame.p95_ms is not none %}
+                {{ "%.2f"|format(view.frame.p95_ms) }}<small>/{{ "%.2f"|format(view.frame.maximum_ms) }} ms</small>
+                {% else %}
+                n/a
+                {% endif %}
+              </div>
+              <div class="metric-note">Slice 执行时长，不等于帧间隔</div>
+            </div>
+          </div>
+          {% if view.frame.segments %}
+          <div class="cpu-core-list" aria-label="活动产帧区间">
+            {% for segment in view.frame.segments %}
+            <span class="cpu-core-chip" title="{{ segment.source }} · confidence {{ segment.confidence }}">
+              活动簇 {{ segment.index }} · {{ segment.frame_count }} 帧
+              {% if segment.duration_ms is not none %}
+              · {{ "%.1f"|format(segment.duration_ms) }} ms
+              {% endif %}
+              · {{ "%.1f"|format(segment.refresh_rate_hz) }} Hz
+            </span>
+            {% endfor %}
+          </div>
+          {% endif %}
+          <div class="assessment">
+            {{ view.frame.interpretation }}
+            {% if not view.frame.presentation_fps_available %}
+            <span class="mono"> · 缺少目标 Surface / frame_maps，最终呈现 FPS 不可用</span>
+            {% endif %}
+          </div>
+        </div>
+      </section>
+      {% endif %}
+
+      {% if view.timeline.available %}
+      <section class="panel" aria-labelledby="timeline-title">
+        <div class="section-head">
+          <div>
+            <h2 id="timeline-title">{{ view.timeline.title }}</h2>
+            <p>{{ view.timeline.subtitle }}</p>
+          </div>
+          <div class="timeline-toolbar" role="group" aria-label="泳道过滤">
+            <button type="button" class="active" data-timeline-filter="all">概览</button>
+            <button type="button" data-timeline-filter="critical">关键路径</button>
+            <button type="button" data-timeline-filter="evidence">证据</button>
+            <span class="tool-divider" aria-hidden="true"></span>
+            <button type="button" data-timeline-action="zoom-in" title="放大（W）">＋</button>
+            <button type="button" data-timeline-action="zoom-out" title="缩小（S）">−</button>
+            <button type="button" data-timeline-action="fit" title="显示完整区间">适配</button>
+            {% if view.timeline.max_depth %}
+            <label class="depth-control" title="控制主线程调用栈显示深度">
+              深度
+              <input id="timeline-depth" type="range" min="0" max="{{ view.timeline.max_depth }}" value="{{ view.timeline.max_depth }}">
+              <output id="timeline-depth-value">{{ view.timeline.max_depth }}</output>
+            </label>
+            {% endif %}
+          </div>
+        </div>
+        {% if view.timeline.cpu_distribution %}
+        <div class="cpu-distribution" aria-label="CPU 分布">
+          <div class="cpu-distribution-head">
+            <strong>CPU 分布</strong>
+            <span>Main thread · Running time</span>
+          </div>
+          <div class="cpu-distribution-body">
+            <div class="cpu-distribution-bar" aria-hidden="true">
+              {% for item in view.timeline.cpu_distribution %}
+              <span class="cpu-distribution-segment"
+                    style="width: {{ '%.4f'|format(item.share * 100) }}%; --cpu-color: {{ item.color }}"
+                    title="CPU {{ item.cpu }} · {{ '%.3f'|format(item.running_ms) }} ms · {{ '%.1f'|format(item.share * 100) }}% · {{ item.slices }} slices"></span>
+              {% endfor %}
+            </div>
+            <div class="cpu-core-list">
+              {% for item in view.timeline.cpu_distribution %}
+              <span class="cpu-core-chip"
+                    style="--cpu-color: {{ item.color }}"
+                    title="{{ '%.3f'|format(item.running_ms) }} ms · {{ item.slices }} slices">
+                CPU {{ item.cpu }} <b>{{ '%.1f'|format(item.share * 100) }}%</b>
+              </span>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        {% endif %}
+        <div class="timeline-viewport">
+          <div id="timeline-chart" class="timeline-chart" aria-live="polite"></div>
+        </div>
+        <div class="timeline-footer">
+          <span>滚轮缩放 · 拖动平移 · Shift 拖动选区 · 双击聚焦 · W/A/S/D 导航</span>
+          <span class="callstack-color-key" title="规范化后的同名 Slice 使用相同基础色；深度仅调整明暗">
+            <i style="background:#5b8ff9"></i>
+            <i style="background:#5ad8a6"></i>
+            <i style="background:#9270ca"></i>
+            <i style="background:#e8684a"></i>
+            同名 Slice 同色
+          </span>
+          <span id="timeline-status" class="timeline-status mono"></span>
+          <span class="mono">
+            {% if view.timeline.source_evidence_id %}
+            source {{ view.timeline.source_evidence_id }}
+            {% else %}
+            仅使用 AnalysisResult 中的阶段
+            {% endif %}
+          </span>
+        </div>
+      </section>
+      {% endif %}
+
+      {% if analysis.cold_start %}
+      <div class="diagnostic-grid">
+        <section class="panel" aria-labelledby="stage-title">
+          <div class="section-head">
+            <div>
+              <h2 id="stage-title">阶段拆分</h2>
+              <p>只展示 Trace 证据支持的阶段，不补齐固定模板。</p>
+            </div>
+          </div>
+          <div class="card-body">
+            {% if view.cold.stages %}
+            <div class="stage-list">
+              {% for stage in view.cold.stages %}
+              <div class="stage-row" title="{{ stage.assessment }}">
+                <div class="stage-name">{{ stage.name }}</div>
+                <div class="stage-bar">
+                  <div class="stage-fill {{ 'critical' if stage.critical else '' }}"
+                       style="width: {{ '%.4f'|format(stage.share * 100) }}%"></div>
+                </div>
+                <div class="stage-duration">{{ "%.2f"|format(stage.duration_ms) }} ms</div>
+              </div>
+              {% endfor %}
+            </div>
+            {% else %}
+            <div class="timeline-empty">Agent 没有形成可信阶段拆分。</div>
+            {% endif %}
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="diagnosis-title">
+          <div class="section-head">
+            <div>
+              <h2 id="diagnosis-title">关键阶段诊断</h2>
+              <p>
+                {{ view.cold.dominant_stage.name if view.cold.dominant_stage else "尚未识别关键阶段" }}
+              </p>
+            </div>
+          </div>
+          <div class="card-body">
+            {% if view.cold.critical_thread %}
+            {% set states = view.cold.critical_thread.state_breakdown %}
+            {% set total = view.cold.state_total_ms %}
+            <div class="kpi-row">
+              <div class="kpi">
+                <div class="kpi-label">Running</div>
+                <div class="kpi-value green">{{ "%.1f"|format(states.running_ms / total * 100 if total else 0) }}%</div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label">Runnable</div>
+                <div class="kpi-value amber">{{ "%.1f"|format(states.runnable_ms / total * 100 if total else 0) }}%</div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label">Sleep / Block</div>
+                <div class="kpi-value">{{ "%.1f"|format((states.sleeping_ms + states.uninterruptible_io_ms + states.uninterruptible_other_ms) / total * 100 if total else 0) }}%</div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label">Top CPU</div>
+                <div class="kpi-value">
+                  {{ view.cold.top_cpu.cpu if view.cold.top_cpu else "—" }}
+                </div>
+              </div>
+            </div>
+            <div class="assessment">
+              {{ view.cold.critical_thread.assessment }}
+              <span class="mono"> · {{ view.cold.critical_thread.diagnosis }}</span>
+            </div>
+            {% else %}
+            <div class="timeline-empty">关键阶段没有结构化线程执行分析。</div>
+            {% endif %}
+          </div>
+        </section>
+      </div>
+      {% endif %}
+
+      {% if view.startup_modules.available %}
+      <section class="panel" aria-labelledby="startup-module-title">
+        <div class="section-head">
+          <div>
+            <h2 id="startup-module-title">启动期 SO / 模块加载排行</h2>
+            <p>{{ view.startup_modules.metric }}</p>
+          </div>
+          <span class="perf-chart-tag">{{ view.startup_modules.total_module_count }} modules</span>
+        </div>
+        <div class="card-body">
+          <div id="startup-module-table" class="perf-module-table" data-page-size="8">
+            <div class="perf-module-row perf-module-head" role="row">
+              <span>#</span>
+              <span>SO / 模块</span>
+              <span>观测区间占用</span>
+              <span>最大单次</span>
+              <span>次数 / 来源</span>
+            </div>
+            {% for module in view.startup_modules.modules %}
+            <div class="perf-module-row" data-startup-module-row role="row" {% if loop.index0 >= 8 %}hidden{% endif %}>
+              <span class="perf-module-rank">{{ module.rank }}</span>
+              <div
+                class="perf-module-name"
+                title="{{ module.representative_slice or module.name }}"
+              >
+                <strong>{{ module.name }}</strong>
+                <small>
+                  +{{ "%.2f"|format(module.first_offset_ms) }} ms
+                  {% if module.path %} · {{ module.path }}{% endif %}
+                </small>
+              </div>
+              <div class="perf-module-weight">
+                <strong>{{ "%.2f"|format(module.observed_duration_ms) }} ms</strong>
+                <div class="perf-module-weight-track" aria-hidden="true">
+                  <span style="width: {{ '%.4f'|format(module.relative_width * 100) }}%"></span>
+                </div>
+              </div>
+              <span>{{ "%.2f"|format(module.max_single_duration_ms) }} ms</span>
+              <span
+                class="perf-module-symbol"
+                title="{{ module.source_ids|join(' · ') }}"
+              >
+                {{ module.occurrences }} · {{ module.kinds|join("/") }}
+              </span>
+            </div>
+            {% endfor %}
+          </div>
+          {% if view.startup_modules.modules|length > 8 %}
+          <div class="perf-module-pager">
+            <button type="button" class="perf-module-page-button" data-startup-module-page="prev">上一页</button>
+            <span id="startup-module-page-status">1 / 1</span>
+            <button type="button" class="perf-module-page-button" data-startup-module-page="next">下一页</button>
+          </div>
+          {% endif %}
+        </div>
+      </section>
+      {% endif %}
+
+      <section class="panel" aria-labelledby="findings-title">
+        <div class="section-head">
+          <div>
+            <h2 id="findings-title">主要发现与建议</h2>
+            <p>观察、推断和确认结论保持不同状态；每条结论关联证据和复测方法。</p>
+          </div>
+        </div>
+        {% if analysis.findings %}
+        <div class="findings">
+          {% for finding in analysis.findings %}
+          <article class="finding">
+            <div class="finding-mark {{ finding.severity }}"></div>
+            <div>
+              <h3>{{ finding.title }}</h3>
+              <div class="finding-meta">
+                {{ finding.severity }} · {{ finding.status }} · confidence {{ "%.2f"|format(finding.confidence) }}
+              </div>
+              <div class="chip-row">
+                {% for evidence_id in finding.evidence_ids %}
+                <button type="button" class="evidence-button" data-evidence-id="{{ evidence_id }}">{{ evidence_id }}</button>
+                {% endfor %}
+              </div>
+            </div>
+            <div>
+              <p>{{ finding.analysis }}</p>
+              <div class="finding-actions">
+                <div>
+                  <strong>优化建议</strong>
+                  <p>{{ finding.recommendation }}</p>
+                </div>
+                <div>
+                  <strong>验证方法</strong>
+                  <p>{{ finding.verification }}</p>
+                </div>
+              </div>
+            </div>
+          </article>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="timeline-empty">当前证据不足以形成性能根因结论。</div>
+        {% endif %}
+      </section>
+
+      {% if analysis.perf %}
+      <section class="panel" aria-labelledby="perf-title">
+        <div class="section-head">
+          <div>
+            <h2 id="perf-title">Perf 联合分析</h2>
+            <p>Perf 样本只在当前关键路径时间窗口内解释，并与 Trace 调度事实联合判断。</p>
+          </div>
+        </div>
+        <div class="perf-summary">
+          <div class="kpi">
+            <div class="kpi-label">Samples</div>
+            <div class="kpi-value">{{ analysis.perf.sample_count }}</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Symbolization</div>
+            <div class="kpi-value">
+              {% if analysis.perf.symbolization_rate is not none %}
+              {{ "%.1f"|format(analysis.perf.symbolization_rate * 100) }}%
+              {% else %}—{% endif %}
+            </div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Events</div>
+            <div class="kpi-value">{{ analysis.perf.events|length }}</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Confidence</div>
+            <div class="kpi-value">{{ "%.2f"|format(analysis.perf.confidence) }}</div>
+          </div>
+        </div>
+        <div class="perf-copy">{{ analysis.perf.assessment }}</div>
+        {% if view.perf and view.perf.available %}
+        <div class="perf-visual-grid">
+          <article class="perf-chart-card" aria-labelledby="perf-hotspot-chart-title">
+            <div class="perf-chart-head">
+              <div>
+                <h3 id="perf-hotspot-chart-title">Hotspot profile</h3>
+                <p>优先展示 Bottom-up 聚合后的可定位函数；通用入口只保留在调用路径中</p>
+              </div>
+              <span class="perf-chart-tag">{{ view.perf.event_name or "Perf event" }}</span>
+            </div>
+            {% if view.perf.thread_profiles %}
+            <div class="perf-hotspot-chart" role="img" aria-label="Perf 热点占比图">
+              {% for profile in view.perf.thread_profiles %}
+              <div data-perf-hotspot-profile="{{ profile.profile_key }}"{% if profile.profile_key != view.perf.active_profile_key %} hidden{% endif %}>
+                {% if profile.hotspots %}
+                {% for hotspot in profile.hotspots[:10] %}
+                <div class="perf-hotspot-row" title="{{ hotspot.symbol }} · {{ hotspot.aggregation_source }} · 聚合占比 {{ '%.2f'|format(hotspot.inclusive_share * 100) }}% · Self {{ hotspot.self_samples }} samples{% if hotspot.representative_reverse_path %} · {{ hotspot.representative_reverse_path|join(' ← ') }}{% endif %}">
+                  <div class="perf-symbol">{{ hotspot.symbol }}</div>
+                  <div class="perf-bar-track" aria-hidden="true">
+                    <span class="perf-bar-inclusive" style="width: {{ '%.4f'|format(hotspot.inclusive_share * 100) }}%"></span>
+                    <span class="perf-bar-self" style="width: {{ '%.4f'|format(hotspot.self_share * 100) }}%"></span>
+                  </div>
+                  <div class="perf-bar-value">{{ "%.2f"|format(hotspot.inclusive_share * 100) }}%</div>
+                </div>
+                {% endfor %}
+                {% else %}
+                <div class="timeline-empty">{{ profile.thread_name }} 没有可定位的应用层聚合热点。</div>
+                {% endif %}
+              </div>
+              {% endfor %}
+            </div>
+            {% elif view.perf.hotspots %}
+            <div class="perf-hotspot-chart" role="img" aria-label="Perf 热点占比图">
+              {% for hotspot in view.perf.hotspots[:10] %}
+              <div class="perf-hotspot-row" title="{{ hotspot.symbol }} · {{ hotspot.aggregation_source }} · 聚合占比 {{ '%.2f'|format(hotspot.inclusive_share * 100) }}% · Self {{ hotspot.self_samples }} samples{% if hotspot.representative_reverse_path %} · {{ hotspot.representative_reverse_path|join(' ← ') }}{% endif %}">
+                <div class="perf-symbol">{{ hotspot.symbol }}</div>
+                <div class="perf-bar-track" aria-hidden="true">
+                  <span class="perf-bar-inclusive" style="width: {{ '%.4f'|format(hotspot.inclusive_share * 100) }}%"></span>
+                  <span class="perf-bar-self" style="width: {{ '%.4f'|format(hotspot.self_share * 100) }}%"></span>
+                </div>
+                <div class="perf-bar-value">{{ "%.2f"|format(hotspot.inclusive_share * 100) }}%</div>
+              </div>
+              {% endfor %}
+            </div>
+            {% else %}
+            <div class="timeline-empty">没有可用于热点占比图的符号数据。</div>
+            {% endif %}
+          </article>
+
+          <article class="perf-chart-card" aria-labelledby="perf-thread-chart-title">
+            <div class="perf-chart-head">
+              <div>
+                <h3 id="perf-thread-chart-title">Thread sample rail</h3>
+                <p>{{ view.perf.thread_scope_reason or "按问题窗口内的相关线程采样分布" }}</p>
+              </div>
+              <span class="perf-chart-tag">{{ view.perf.sample_count }} samples</span>
+            </div>
+            {% if view.perf.threads %}
+            <div class="perf-thread-rail" role="img" aria-label="Perf 线程采样分布图">
+              {% for thread in view.perf.threads %}
+              <span
+                class="perf-thread-segment thread-color-{{ loop.index0 }}"
+                style="width: {{ '%.4f'|format(thread.sample_share * 100) }}%"
+                title="{{ thread.thread_name }} · TID {{ thread.thread_id or '—' }} · {{ thread.sample_count }} samples · {{ '%.2f'|format(thread.sample_share * 100) }}%"
+              ></span>
+              {% endfor %}
+            </div>
+            <div class="perf-thread-list">
+              {% for thread in view.perf.threads %}
+              <div class="perf-thread-row">
+                <span class="perf-thread-swatch thread-color-{{ loop.index0 }}"></span>
+                <strong title="{{ thread.thread_name }}">{{ thread.thread_name }}{% if thread.thread_id %} · {{ thread.thread_id }}{% endif %}</strong>
+                <span>{{ thread.sample_count }} · {{ "%.1f"|format(thread.sample_share * 100) }}%</span>
+              </div>
+              {% endfor %}
+            </div>
+            {% if view.perf.excluded_thread_count %}
+            <div class="perf-thread-note">
+              已隐藏 {{ view.perf.excluded_thread_count }} 个未进入关键路径的采样线程
+            </div>
+            {% endif %}
+            {% else %}
+            <div class="timeline-empty">Trace DB 中没有匹配当前 Perf 窗口的线程样本。</div>
+            {% endif %}
+          </article>
+        </div>
+
+        {% if view.perf.flame_root %}
+        <article class="perf-flame-card" aria-labelledby="perf-flame-title">
+          <div class="perf-chart-head">
+            <div>
+              <h3 id="perf-flame-title">Call stack flame graph</h3>
+              <p>左键下钻 · 右键返回 · 双击复位；宽度按 {{ view.perf.event_name or "event" }} 权重</p>
+            </div>
+            <div class="perf-flame-tools" role="tablist" aria-label="相关线程 Perf 视图">
+              {% for profile in view.perf.thread_profiles %}
+              <button
+                type="button"
+                class="perf-flame-button{% if profile.profile_key == view.perf.active_profile_key %} active{% endif %}"
+                data-perf-focus-key="{{ profile.profile_key }}"
+                role="tab"
+                aria-selected="{% if profile.profile_key == view.perf.active_profile_key %}true{% else %}false{% endif %}"
+                title="{{ profile.thread_name }} · {{ profile.sample_count }} samples{% if profile.roles %} · {{ profile.roles|join(' / ') }}{% endif %}"
+              >
+                {% if profile.thread_id %}{{ profile.thread_name }} · {{ profile.thread_id }}{% if not profile.has_perf_samples %} · 无 Perf{% endif %}{% else %}合并视图{% endif %}
+              </button>
+              {% endfor %}
+              <button type="button" class="perf-flame-button" data-perf-flame-action="back">返回</button>
+              <button type="button" class="perf-flame-button" data-perf-flame-action="reset">复位</button>
+            </div>
+          </div>
+          <div id="perf-flame-path" class="perf-flame-path">{{ view.perf.flame_root.name }}</div>
+          <div class="perf-flame-shell">
+            <canvas id="perf-flame-canvas" class="perf-flame-canvas" tabindex="0" aria-label="可交互 Perf 调用栈火焰图"></canvas>
+          </div>
+          <div id="perf-flame-empty" class="timeline-empty" hidden>
+            该相关线程在问题区间内没有 Perf 样本；仍保留线程调度状态，避免因采样缺失而从分析视图消失。
+          </div>
+          <div id="perf-flame-tooltip" class="perf-flame-tooltip"></div>
+          <div class="perf-flame-meta">
+            <span>{{ view.perf.projected_nodes }} 个可见节点</span>
+            <span>
+              {{ view.perf.omitted_nodes }} 个低占比分支节点已过滤
+              （阈值 {{ "%.2f"|format(view.perf.min_node_share * 100) }}%）
+            </span>
+            <span>
+              0.1% 过滤后按实际树深完整展开 ·
+              原始最大调用深度 {{ view.perf.flame_max_depth }}
+            </span>
+            <span>固定高度视窗 · 右侧滚动查看全部层</span>
+            <span>交互语义参考 OpenHarmony HiPerf，数据来自当前 TraceStreamer DB</span>
+          </div>
+
+          {% if view.perf.state_profiles %}
+          <section class="perf-thread-state-card" aria-labelledby="perf-thread-state-title">
+            <div class="perf-thread-state-head">
+              <div>
+                <h4 id="perf-thread-state-title">问题区间线程调度状态</h4>
+                <p>分母固定为完整问题区间；切换上方线程 Tab 可联动查看火焰图、热点与该线程状态。</p>
+              </div>
+            </div>
+            {% for state_profile in view.perf.state_profiles %}
+            <div
+              data-perf-state-profile="{{ state_profile.profile_key }}"
+              {% if state_profile.profile_key != view.perf.active_profile_key %}hidden{% endif %}
+            >
+              {% if state_profile.mode == "comparison" %}
+              <div class="perf-state-comparison">
+                {% for thread in state_profile.threads %}
+                <div class="perf-state-comparison-row">
+                  <div class="perf-state-thread-label">
+                    <strong>{{ thread.thread_name or ("TID " ~ thread.thread_id) }}</strong>
+                    <span>TID {{ thread.thread_id }}{% if thread.roles %} · {{ thread.roles|join(" / ") }}{% endif %}</span>
+                  </div>
+                  {% if thread.available %}
+                  <div class="perf-state-bar" aria-label="{{ thread.thread_name }} 调度状态占比">
+                    {% for state in thread.states %}
+                    {% if state.duration_ms > 0 %}
+                    <span
+                      class="perf-state-segment"
+                      style="width: {{ '%.5f'|format(state.share * 100) }}%; background: {{ state.color }}"
+                      title="{{ state.label }} · {{ '%.2f'|format(state.duration_ms) }} ms · {{ '%.1f'|format(state.share * 100) }}%"
+                    ></span>
+                    {% endif %}
+                    {% endfor %}
+                  </div>
+                  <div class="perf-state-verdict" title="{{ thread.assessment }}">{{ thread.diagnosis }}</div>
+                  {% else %}
+                  <div class="timeline-empty">{{ thread.reason }}</div>
+                  <div></div>
+                  {% endif %}
+                </div>
+                {% endfor %}
+              </div>
+              <p class="perf-thread-state-note">{{ state_profile.note }}</p>
+              {% elif state_profile.available %}
+              <div class="perf-state-bar large" aria-label="{{ state_profile.thread_name }} 问题区间调度状态占比">
+                {% for state in state_profile.states %}
+                {% if state.duration_ms > 0 %}
+                <span
+                  class="perf-state-segment"
+                  style="width: {{ '%.5f'|format(state.share * 100) }}%; background: {{ state.color }}"
+                  title="{{ state.label }} · {{ '%.2f'|format(state.duration_ms) }} ms · {{ '%.1f'|format(state.share * 100) }}%"
+                ></span>
+                {% endif %}
+                {% endfor %}
+              </div>
+              <div class="perf-state-legend">
+                {% for state in state_profile.states %}
+                {% if state.duration_ms > 0 %}
+                <span class="perf-state-legend-item">
+                  <i style="background: {{ state.color }}"></i>
+                  {{ state.label }} {{ '%.2f'|format(state.duration_ms) }} ms · {{ '%.1f'|format(state.share * 100) }}%
+                </span>
+                {% endif %}
+                {% endfor %}
+              </div>
+              <div class="perf-state-kpis">
+                <div class="perf-state-kpi">
+                  <small>Longest running</small>
+                  <strong>{{ '%.2f'|format(state_profile.longest_running_ms) }} ms</strong>
+                  <span>最长连续占用 CPU</span>
+                </div>
+                <div class="perf-state-kpi">
+                  <small>Longest runnable</small>
+                  <strong>{{ '%.2f'|format(state_profile.longest_runnable_ms) }} ms</strong>
+                  <span>最长就绪等待调度</span>
+                </div>
+                <div class="perf-state-kpi">
+                  <small>Longest sleep</small>
+                  <strong>{{ '%.2f'|format(state_profile.longest_sleep_ms) }} ms</strong>
+                  <span>最长休眠/等待</span>
+                </div>
+                <div class="perf-state-kpi">
+                  <small>Scheduling</small>
+                  <strong>{{ state_profile.cpu_migrations }} migrations</strong>
+                  <span>{{ state_profile.schedule_slices }} slices{% if state_profile.priority.dominant_value is not none %} · dominant priority {{ state_profile.priority.dominant_value }}{% endif %}</span>
+                </div>
+              </div>
+              {% if state_profile.cpu_distribution %}
+              <div class="perf-state-cpus" aria-label="问题区间 CPU 分布">
+                {% for cpu in state_profile.cpu_distribution %}
+                <span class="perf-state-cpu">CPU {{ cpu.cpu }} · {{ '%.2f'|format(cpu.running_ms) }} ms · {{ '%.1f'|format(cpu.share * 100) }}%</span>
+                {% endfor %}
+              </div>
+              {% endif %}
+              <div class="perf-state-assessment">
+                <strong>{{ state_profile.diagnosis }}</strong> · {{ state_profile.assessment }}
+              </div>
+              {% else %}
+              <div class="timeline-empty">{{ state_profile.reason }}</div>
+              {% endif %}
+            </div>
+            {% endfor %}
+          </section>
+          {% endif %}
+        </article>
+        {% elif view.perf.reason %}
+        <div class="timeline-empty">火焰图未生成：{{ view.perf.reason }}</div>
+        {% endif %}
+
+        {% if view.perf.diagnosis.available %}
+        {% set diagnosis = view.perf.diagnosis %}
+        <article class="perf-diagnosis-card" aria-labelledby="perf-diagnosis-title">
+          <div class="perf-diagnosis-head">
+            <div>
+              <h3 id="perf-diagnosis-title">Perf 定位结论 · {{ diagnosis.title }}</h3>
+              <p>{{ diagnosis.analysis }}</p>
+            </div>
+            <span class="perf-chart-tag">
+              {{ diagnosis.status }} · {{ "%.2f"|format(diagnosis.confidence) }}
+            </span>
+          </div>
+
+          <div class="perf-diagnosis-grid">
+            <div class="perf-diagnosis-fact">
+              <small>Trace stage</small>
+              {% if diagnosis.stage %}
+              <strong title="{{ diagnosis.stage.assessment }}">{{ diagnosis.stage.name }}</strong>
+              <span>
+                {{ "%.2f"|format(diagnosis.stage.duration_ms) }} ms
+                {% if diagnosis.stage.total_share is not none %}
+                · 总时延 {{ "%.1f"|format(diagnosis.stage.total_share * 100) }}%
+                {% endif %}
+              </span>
+              {% else %}
+              <strong>未定位到结构化阶段</strong>
+              {% endif %}
+            </div>
+            <div class="perf-diagnosis-fact">
+              <small>Scheduling verdict</small>
+              {% if diagnosis.thread %}
+              <strong>{{ diagnosis.thread.diagnosis_label }} · {{ diagnosis.thread.name }}</strong>
+              <span>
+                Running {{ "%.2f"|format(diagnosis.thread.running_ms) }} ms ·
+                Runnable {{ "%.2f"|format(diagnosis.thread.runnable_ms) }} ms ·
+                Sleep {{ "%.2f"|format(diagnosis.thread.sleeping_ms) }} ms
+              </span>
+              {% else %}
+              <strong>缺少可交叉的线程调度结论</strong>
+              {% endif %}
+            </div>
+            <div class="perf-diagnosis-fact">
+              <small>Perf scope</small>
+              <strong>仅定位关键线程</strong>
+              <span>
+                {{ view.perf.sample_count }} samples ·
+                {% if view.perf.selected_thread_ids %}
+                TID {{ view.perf.selected_thread_ids|join(", ") }}
+                {% else %}
+                {{ view.perf.scope }}
+                {% endif %}
+              </span>
+            </div>
+          </div>
+
+          {% if diagnosis.anchors %}
+          <div class="perf-anchor-chain" aria-label="Perf 定位锚点">
+            {% for anchor in diagnosis.anchors %}
+            <div class="perf-anchor" title="{{ anchor.symbol }} · {{ anchor.critical_path_relevance }}">
+              <span class="perf-anchor-index">{{ loop.index }}</span>
+              <strong>{{ anchor.symbol }}</strong>
+              <span>
+                Inclusive {{ "%.2f"|format(anchor.inclusive_share * 100) }}%
+                · Self {{ anchor.self_samples }}
+              </span>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          {% if diagnosis.evidence_ids %}
+          <div class="chip-row">
+            {% for evidence_id in diagnosis.evidence_ids %}
+            <button type="button" class="evidence-button" data-evidence-id="{{ evidence_id }}">{{ evidence_id }}</button>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          {% if diagnosis.recommendation or diagnosis.verification %}
+          <div class="perf-diagnosis-actions">
+            {% if diagnosis.recommendation %}
+            <div>
+              <strong>直接优化动作</strong>
+              <p>{{ diagnosis.recommendation }}</p>
+            </div>
+            {% endif %}
+            {% if diagnosis.verification %}
+            <div>
+              <strong>复测判定标准</strong>
+              <p>{{ diagnosis.verification }}</p>
+            </div>
+            {% endif %}
+          </div>
+          {% endif %}
+        </article>
+        {% endif %}
+        {% endif %}
+
+        <details class="perf-raw-details">
+          <summary>
+            <span>原始热点取证明细</span>
+            <span class="mono">{{ analysis.perf.events|length }} events</span>
+          </summary>
+          {% for event in analysis.perf.events %}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol · {{ event.event_name }}</th>
+                  <th>Module</th>
+                  <th>Self</th>
+                  <th>Inclusive</th>
+                  <th>Share</th>
+                  <th>Critical-path relation</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for hotspot in event.hotspots %}
+                <tr>
+                  <td class="mono">{{ hotspot.symbol }}</td>
+                  <td class="mono">{{ hotspot.file_path or "未知" }}</td>
+                  <td>{{ hotspot.self_samples }}</td>
+                  <td>{{ hotspot.inclusive_samples }}</td>
+                  <td>{{ "%.2f"|format(hotspot.inclusive_share * 100) }}%</td>
+                  <td>{{ hotspot.critical_path_relevance }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endfor %}
+        </details>
+      </section>
+      {% endif %}
+
+      <section class="panel" aria-labelledby="evidence-title">
+        <div class="section-head">
+          <div>
+            <h2 id="evidence-title">证据索引</h2>
+            <p>报告中的每个判断都应能回到一次只读工具调用及其原始结果。</p>
+          </div>
+        </div>
+        {% if evidence %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Evidence ID</th>
+                <th>Tool</th>
+                <th>Summary</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in evidence %}
+              <tr>
+                <td>
+                  <button type="button" class="evidence-button" data-evidence-id="{{ item.evidence_id }}">
+                    {{ item.evidence_id }}
+                  </button>
+                </td>
+                <td class="mono">{{ item.tool }}</td>
+                <td>{{ item.summary }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="timeline-empty">没有生成证据记录。</div>
+        {% endif %}
+      </section>
+
+      {% if analysis.limitations %}
+      <section class="panel" aria-labelledby="limitations-title">
+        <div class="section-head">
+          <div>
+            <h2 id="limitations-title">限制与未确认事项</h2>
+            <p>这些缺口会影响边界、阶段或根因结论的置信度。</p>
+          </div>
+        </div>
+        <div class="limitations">
+          {% for limitation in analysis.limitations %}
+          <div class="limitation"><span>△</span><span>{{ limitation }}</span></div>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+    </div>
+
+    <footer class="page-footer">
+      <span>DitingAgent · evidence-driven performance analysis</span>
+      <span>{{ request.scenario }} · {{ request.symptom }}</span>
+    </footer>
+  </main>
+
+  <div class="drawer-backdrop" data-close-drawer></div>
+  <aside class="drawer" aria-hidden="true" aria-labelledby="drawer-title">
+    <div class="drawer-head">
+      <div>
+        <div class="eyebrow">Evidence Detail</div>
+        <h2 id="drawer-title">证据详情</h2>
+      </div>
+      <button type="button" class="drawer-close" data-close-drawer aria-label="关闭">×</button>
+    </div>
+    <div id="drawer-summary" class="drawer-summary"></div>
+    <dl id="drawer-grid" class="drawer-grid"></dl>
+  </aside>
+
+  <script>
+    const REPORT = {{ report_json | safe }};
+    const timeline = REPORT.timeline || {};
+    const perfView = REPORT.perf || {};
+    const evidenceById = new Map(
+      (REPORT.evidence || []).map((item) => [item.evidence_id, item])
+    );
+    const itemById = new Map();
+    let timelineFilter = "all";
+
+    function formatMs(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "—";
+      if (Math.abs(number) >= 1000) return (number / 1000).toFixed(3) + " s";
+      return number.toFixed(number >= 100 ? 1 : 3) + " ms";
+    }
+
+    function displayValue(value) {
+      if (value === null || value === undefined) return "—";
+      if (typeof value === "object") return JSON.stringify(value, null, 2);
+      return String(value);
+    }
+
+    function detailEntries(value) {
+      if (!value || typeof value !== "object") return [["value", value]];
+      return Object.entries(value).filter(([key]) => key !== "detail");
+    }
+
+    function openDrawer(title, summary, detail) {
+      document.getElementById("drawer-title").textContent = title || "证据详情";
+      document.getElementById("drawer-summary").textContent = summary || "";
+      const grid = document.getElementById("drawer-grid");
+      grid.replaceChildren();
+      detailEntries(detail).forEach(([key, value]) => {
+        const term = document.createElement("dt");
+        term.textContent = key;
+        const description = document.createElement("dd");
+        description.textContent = displayValue(value);
+        grid.append(term, description);
+      });
+      document.body.classList.add("drawer-open");
+      document.querySelector(".drawer").setAttribute("aria-hidden", "false");
+    }
+
+    function closeDrawer() {
+      document.body.classList.remove("drawer-open");
+      document.querySelector(".drawer").setAttribute("aria-hidden", "true");
+    }
+
+    function renderTimeline() {
+      const root = document.getElementById("timeline-chart");
+      if (!root) return;
+      root.replaceChildren();
+      itemById.clear();
+      if (!timeline.available) {
+        const empty = document.createElement("div");
+        empty.className = "timeline-empty";
+        empty.textContent = timeline.reason || "没有时间线数据。";
+        root.append(empty);
+        return;
+      }
+
+      const axis = document.createElement("div");
+      axis.className = "timeline-axis";
+      const axisLabel = document.createElement("div");
+      axisLabel.className = "timeline-axis-label";
+      axisLabel.textContent = "RELATIVE TIME";
+      const axisTrack = document.createElement("div");
+      axisTrack.className = "axis-track";
+      for (let index = 0; index <= 5; index += 1) {
+        const mark = document.createElement("span");
+        mark.className = "axis-mark";
+        if (index === 0) mark.classList.add("is-start");
+        if (index === 5) mark.classList.add("is-end");
+        mark.style.left = (index * 20) + "%";
+        mark.textContent = formatMs(timeline.duration_ms * index / 5);
+        axisTrack.append(mark);
+      }
+      axis.append(axisLabel, axisTrack);
+      root.append(axis);
+
+      const body = document.createElement("div");
+      body.className = "timeline-body";
+      (timeline.lanes || []).forEach((lane) => {
+        const row = document.createElement("div");
+        row.className = "lane-row";
+        row.dataset.laneKind = lane.kind || "";
+        row.style.minHeight = Math.max(Number(lane.height) || 38, 38) + "px";
+
+        const label = document.createElement("div");
+        label.className = "lane-label";
+        const strong = document.createElement("strong");
+        strong.textContent = lane.label || "未命名泳道";
+        const sub = document.createElement("span");
+        sub.textContent = lane.sublabel || "";
+        label.append(strong, sub);
+
+        const track = document.createElement("div");
+        track.className = "lane-track";
+        (lane.items || []).forEach((item) => {
+          itemById.set(item.id, item);
+          const block = document.createElement("button");
+          block.type = "button";
+          block.className = "trace-block role-" + (item.role || "system");
+          block.dataset.itemId = item.id;
+          block.dataset.role = item.role || "";
+          block.style.left = Math.max(0, Number(item.left) || 0) + "%";
+          block.style.width = Math.min(100 - (Number(item.left) || 0), Number(item.width) || 0.25) + "%";
+          block.style.top = (8 + (Number(item.depth) || 0) * 18) + "px";
+          block.textContent = item.label || "";
+          block.title = (item.label || "") + " · " + formatMs(item.duration_ms);
+          block.addEventListener("click", () => {
+            openDrawer(
+              item.label || "时间线事件",
+              "start " + formatMs(item.start_ms) + " · duration " + formatMs(item.duration_ms),
+              item.detail || item
+            );
+          });
+          track.append(block);
+        });
+
+        (timeline.boundaries || []).forEach((boundary) => {
+          const pin = document.createElement("div");
+          pin.className = "boundary-pin";
+          const position = Math.max(0, Math.min(100, Number(boundary.position) || 0));
+          pin.style.left = position + "%";
+          if (position <= 1) pin.classList.add("is-start");
+          if (position >= 99) pin.classList.add("is-end");
+          if (lane === timeline.lanes[0]) {
+            const text = document.createElement("span");
+            text.textContent = boundary.label || "边界";
+            pin.append(text);
+          }
+          track.append(pin);
+        });
+
+        row.append(label, track);
+        body.append(row);
+      });
+
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("class", "link-layer");
+      svg.setAttribute("aria-hidden", "true");
+      body.append(svg);
+      root.append(body);
+      requestAnimationFrame(drawLinks);
+      applyTimelineFilter();
+    }
+
+    function drawLinks() {
+      const body = document.querySelector(".timeline-body");
+      const svg = document.querySelector(".link-layer");
+      if (!body || !svg) return;
+      svg.replaceChildren();
+      const svgRect = svg.getBoundingClientRect();
+      svg.setAttribute("viewBox", `0 0 ${Math.max(svgRect.width, 1)} ${Math.max(svgRect.height, 1)}`);
+      (timeline.links || []).forEach((link) => {
+        const source = document.querySelector(`[data-item-id="${CSS.escape(link.source)}"]`);
+        const target = document.querySelector(`[data-item-id="${CSS.escape(link.target)}"]`);
+        if (!source || !target || source.hidden || target.hidden) return;
+        const sourceRect = source.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const x1 = sourceRect.right - svgRect.left;
+        const y1 = sourceRect.top + sourceRect.height / 2 - svgRect.top;
+        const x2 = targetRect.left - svgRect.left;
+        const y2 = targetRect.top + targetRect.height / 2 - svgRect.top;
+        const middle = x1 + (x2 - x1) * 0.5;
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", `M ${x1} ${y1} C ${middle} ${y1}, ${middle} ${y2}, ${x2} ${y2}`);
+        svg.append(path);
+      });
+    }
+
+    function applyTimelineFilter() {
+      document.querySelectorAll(".trace-block").forEach((block) => {
+        const role = block.dataset.role;
+        const item = itemById.get(block.dataset.itemId);
+        let visible = true;
+        if (timelineFilter === "critical") {
+          visible = [
+            "critical", "target", "frame-actual", "render-frame",
+            "wakeup-source", "wakeup-target",
+          ].includes(role);
+        } else if (timelineFilter === "evidence") {
+          const detail = item && item.detail;
+          visible = Boolean(
+            detail &&
+            (
+              detail.evidence_id ||
+              (Array.isArray(detail.evidence_ids) && detail.evidence_ids.length) ||
+              (Array.isArray(detail.candidate_reasons) && detail.candidate_reasons.length)
+            )
+          );
+        }
+        block.hidden = !visible;
+      });
+      requestAnimationFrame(drawLinks);
+    }
+
+    let perfFlameController = null;
+
+    function compactSymbol(value, maxLength = 84) {
+      const text = String(value || "[unknown]");
+      if (text.length <= maxLength) return text;
+      const parameterIndex = text.indexOf("(");
+      if (parameterIndex > 0 && parameterIndex <= maxLength) {
+        return text.slice(0, parameterIndex) + "(…)";
+      }
+      return text.slice(0, maxLength - 1) + "…";
+    }
+
+    function flameColor(node, rootCount) {
+      const name = String(node.name || "");
+      let hash = 0;
+      for (let index = 0; index < name.length; index += 1) {
+        hash = ((hash << 5) - hash + name.charCodeAt(index)) | 0;
+      }
+      const share = rootCount > 0 ? Number(node.event_count || 0) / rootCount : 0;
+      const hue = 12 + Math.abs(hash % 30);
+      const saturation = 68 + Math.round(Math.min(1, share) * 12);
+      const lightness = 70 - Math.round(Math.min(1, share) * 17);
+      return `hsl(${hue} ${saturation}% ${lightness}%)`;
+    }
+
+    function createPerfFlame(canvas) {
+      const rootNode = perfView.flame_root;
+      if (!canvas || !rootNode) return null;
+      const tooltip = document.getElementById("perf-flame-tooltip");
+      const pathLabel = document.getElementById("perf-flame-path");
+      const emptyState = document.getElementById("perf-flame-empty");
+      const shell = canvas.parentElement;
+      const threadRoots = new Map(
+        (rootNode.children || [])
+          .filter((node) => Number.isFinite(Number(node.thread_id)))
+          .map((node) => [String(node.thread_id), node])
+      );
+      const profileRows = perfView.thread_profiles || [];
+      let focusKey = String(perfView.active_profile_key || "combined");
+
+      function rootForFocus(key) {
+        if (key === "combined") return rootNode;
+        if (threadRoots.has(key)) return threadRoots.get(key);
+        const sampledProfiles = profileRows.filter(
+          (profile) => profile.profile_key !== "combined" && profile.has_perf_samples
+        );
+        const selectedProfile = profileRows.find(
+          (profile) => String(profile.profile_key) === String(key)
+        );
+        if (sampledProfiles.length === 1 && selectedProfile?.has_perf_samples) return rootNode;
+        return null;
+      }
+
+      let focusRoot = rootForFocus(focusKey);
+      const state = {
+        current: focusRoot,
+        history: [],
+        path: !focusRoot
+          ? []
+          : focusRoot === rootNode
+          ? [rootNode.name]
+          : [rootNode.name, focusRoot.name],
+        hits: [],
+        hovered: null,
+        scrollToRoot: true,
+      };
+      const rowHeight = 23;
+
+      function treeDepth(node) {
+        if (!node || !node.children || !node.children.length) return 0;
+        return 1 + Math.max(...node.children.map(treeDepth));
+      }
+
+      function updatePath() {
+        if (!pathLabel) return;
+        if (state.current) {
+          pathLabel.textContent = state.path.join("  ›  ");
+          return;
+        }
+        const profile = profileRows.find(
+          (item) => String(item.profile_key) === focusKey
+        );
+        pathLabel.textContent = `${profile?.thread_name || "当前线程"} · 无 Perf 样本`;
+      }
+
+      function draw() {
+        if (!state.current) {
+          if (shell) shell.hidden = true;
+          if (emptyState) emptyState.hidden = false;
+          updatePath();
+          return;
+        }
+        if (shell) shell.hidden = false;
+        if (emptyState) emptyState.hidden = true;
+        const width = Math.max(520, shell ? shell.clientWidth : 900);
+        const visibleDepth = treeDepth(state.current);
+        const height = Math.max(260, (visibleDepth + 1) * rowHeight + 20);
+        const ratio = Math.max(1, window.devicePixelRatio || 1);
+        canvas.width = Math.round(width * ratio);
+        canvas.height = Math.round(height * ratio);
+        canvas.style.height = height + "px";
+        const context = canvas.getContext("2d");
+        context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        context.clearRect(0, 0, width, height);
+        context.font = "9px ui-monospace, SFMono-Regular, Consolas, monospace";
+        context.textBaseline = "middle";
+        state.hits = [];
+        const rootCount = Math.max(1, Number(state.current.event_count || 0));
+
+        function drawNode(node, x, y, nodeWidth, depth) {
+          if (nodeWidth < 0.7) return;
+          const rect = {
+            node,
+            x,
+            y,
+            width: nodeWidth,
+            height: rowHeight - 2,
+          };
+          state.hits.push(rect);
+          context.fillStyle = flameColor(node, rootCount);
+          context.fillRect(x + 0.5, y + 0.5, Math.max(0, nodeWidth - 1), rowHeight - 3);
+          context.strokeStyle = node === state.hovered
+            ? "rgba(74, 27, 14, 0.92)"
+            : "rgba(117, 51, 31, 0.18)";
+          context.lineWidth = node === state.hovered ? 1.6 : 0.7;
+          context.strokeRect(x + 0.5, y + 0.5, Math.max(0, nodeWidth - 1), rowHeight - 3);
+          if (nodeWidth >= 42) {
+            const label = compactSymbol(node.name, Math.floor(nodeWidth / 5.6));
+            context.save();
+            context.beginPath();
+            context.rect(x + 3, y + 1, Math.max(0, nodeWidth - 6), rowHeight - 4);
+            context.clip();
+            context.fillStyle = "rgba(54, 24, 16, 0.9)";
+            context.fillText(label, x + 4, y + (rowHeight - 2) / 2);
+            context.restore();
+          }
+          if (!node.children || !node.children.length) return;
+          let offset = 0;
+          const parentCount = Math.max(1, Number(node.event_count || 0));
+          node.children.forEach((child) => {
+            const childWidth = nodeWidth * Number(child.event_count || 0) / parentCount;
+            drawNode(child, x + offset, y - rowHeight, childWidth, depth + 1);
+            offset += childWidth;
+          });
+        }
+
+        drawNode(state.current, 0, height - rowHeight - 2, width, 0);
+        updatePath();
+        if (shell && state.scrollToRoot) {
+          shell.scrollTop = shell.scrollHeight;
+          state.scrollToRoot = false;
+        }
+      }
+
+      function point(event) {
+        const rect = canvas.getBoundingClientRect();
+        return {x: event.clientX - rect.left, y: event.clientY - rect.top};
+      }
+
+      function hitAt(position) {
+        for (let index = state.hits.length - 1; index >= 0; index -= 1) {
+          const hit = state.hits[index];
+          if (
+            position.x >= hit.x && position.x <= hit.x + hit.width &&
+            position.y >= hit.y && position.y <= hit.y + hit.height
+          ) return hit;
+        }
+        return null;
+      }
+
+      function showTooltip(event, hit) {
+        if (!tooltip || !hit) return;
+        const node = hit.node;
+        const rootCount = Math.max(1, Number(state.current.event_count || 0));
+        const share = Number(node.event_count || 0) / rootCount * 100;
+        tooltip.textContent =
+          `${node.name} · ${Number(node.samples || 0)} samples · ` +
+          `${share.toFixed(2)}% of current root · Self ${Number(node.self_samples || 0)}`;
+        tooltip.style.display = "block";
+        tooltip.style.left = Math.max(
+          8,
+          Math.min(window.innerWidth - 540, event.clientX + 14)
+        ) + "px";
+        tooltip.style.top = Math.min(window.innerHeight - 70, event.clientY + 14) + "px";
+      }
+
+      function hideTooltip() {
+        if (tooltip) tooltip.style.display = "none";
+      }
+
+      function drill(node) {
+        if (!node || node === state.current || !node.children || !node.children.length) return;
+        state.history.push({node: state.current, path: [...state.path]});
+        state.current = node;
+        state.path.push(compactSymbol(node.name, 46));
+        state.hovered = null;
+        state.scrollToRoot = true;
+        hideTooltip();
+        draw();
+      }
+
+      function back() {
+        const previous = state.history.pop();
+        if (!previous) return;
+        state.current = previous.node;
+        state.path = previous.path;
+        state.hovered = null;
+        state.scrollToRoot = true;
+        hideTooltip();
+        draw();
+      }
+
+      function reset() {
+        state.current = focusRoot;
+        state.history = [];
+        state.path = !focusRoot
+          ? []
+          : focusRoot === rootNode
+          ? [rootNode.name]
+          : [rootNode.name, focusRoot.name];
+        state.hovered = null;
+        state.scrollToRoot = true;
+        hideTooltip();
+        draw();
+      }
+
+      function focusThread(nextKey) {
+        const normalizedKey = String(nextKey);
+        const knownProfile = normalizedKey === "combined" || profileRows.some(
+          (profile) => String(profile.profile_key) === normalizedKey
+        );
+        if (!knownProfile) return false;
+        focusKey = normalizedKey;
+        focusRoot = rootForFocus(normalizedKey);
+        reset();
+        return true;
+      }
+
+      canvas.addEventListener("pointermove", (event) => {
+        const hit = hitAt(point(event));
+        const nextHovered = hit ? hit.node : null;
+        if (nextHovered !== state.hovered) {
+          state.hovered = nextHovered;
+          draw();
+        }
+        if (hit) showTooltip(event, hit);
+        else hideTooltip();
+      });
+      canvas.addEventListener("pointerleave", () => {
+        state.hovered = null;
+        hideTooltip();
+        draw();
+      });
+      canvas.addEventListener("click", (event) => {
+        const hit = hitAt(point(event));
+        if (hit) drill(hit.node);
+      });
+      canvas.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        back();
+      });
+      canvas.addEventListener("dblclick", (event) => {
+        event.preventDefault();
+        reset();
+      });
+      canvas.addEventListener("keydown", (event) => {
+        if (event.key === "Backspace" || event.key === "ArrowLeft") {
+          event.preventDefault();
+          back();
+        } else if (event.key === "Escape" || event.key === "Home") {
+          event.preventDefault();
+          reset();
+        }
+      });
+
+      draw();
+      return {draw, resize: draw, back, reset, focusThread};
+    }
+
+    function renderPerfVisuals() {
+      const canvas = document.getElementById("perf-flame-canvas");
+      perfFlameController = createPerfFlame(canvas);
+      document.querySelectorAll("[data-perf-flame-action]").forEach((button) => {
+        button.addEventListener("click", () => {
+          if (!perfFlameController) return;
+          if (button.dataset.perfFlameAction === "back") perfFlameController.back();
+          else perfFlameController.reset();
+        });
+      });
+      document.querySelectorAll("[data-perf-focus-key]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const key = String(button.dataset.perfFocusKey || "combined");
+          if (
+            perfFlameController &&
+            !perfFlameController.focusThread(key)
+          ) return;
+          document.querySelectorAll("[data-perf-focus-key]").forEach(
+            (candidate) => {
+              const active = candidate.dataset.perfFocusKey === key;
+              candidate.classList.toggle("active", active);
+              candidate.setAttribute("aria-selected", String(active));
+            }
+          );
+          document.querySelectorAll("[data-perf-hotspot-profile]").forEach(
+            (profile) => {
+              profile.hidden = profile.dataset.perfHotspotProfile !== key;
+            }
+          );
+          document.querySelectorAll("[data-perf-state-profile]").forEach(
+            (profile) => {
+              profile.hidden = profile.dataset.perfStateProfile !== key;
+            }
+          );
+        });
+      });
+      renderStartupModulePagination();
+    }
+
+    function renderStartupModulePagination() {
+      const table = document.getElementById("startup-module-table");
+      if (!table) return;
+      const rows = [...table.querySelectorAll("[data-startup-module-row]")];
+      const pageSize = Math.max(1, Number(table.dataset.pageSize) || 8);
+      const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+      const status = document.getElementById("startup-module-page-status");
+      const previous = document.querySelector("[data-startup-module-page='prev']");
+      const next = document.querySelector("[data-startup-module-page='next']");
+      let page = 0;
+
+      function render() {
+        rows.forEach((row, index) => {
+          row.hidden = Math.floor(index / pageSize) !== page;
+        });
+        if (status) status.textContent = `${page + 1} / ${pageCount}`;
+        if (previous) previous.disabled = page === 0;
+        if (next) next.disabled = page >= pageCount - 1;
+      }
+
+      if (previous) {
+        previous.addEventListener("click", () => {
+          page = Math.max(0, page - 1);
+          render();
+        });
+      }
+      if (next) {
+        next.addEventListener("click", () => {
+          page = Math.min(pageCount - 1, page + 1);
+          render();
+        });
+      }
+      render();
+    }
+
+    let canvasController = null;
+
+    function createCanvasTimeline(root) {
+      root.replaceChildren();
+      itemById.clear();
+      if (!timeline.available) {
+        const empty = document.createElement("div");
+        empty.className = "timeline-empty";
+        empty.textContent = timeline.reason || "没有时间线数据。";
+        root.append(empty);
+        return null;
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.className = "trace-canvas";
+      canvas.tabIndex = 0;
+      canvas.setAttribute("aria-label", "可交互冷启动证据时间线");
+      const tooltip = document.createElement("div");
+      tooltip.className = "trace-tooltip";
+      tooltip.hidden = true;
+      root.append(canvas, tooltip);
+
+      const totalMs = Math.max(Number(timeline.duration_ms) || 0, 0.001);
+      const state = {
+        viewStart: 0,
+        viewEnd: totalMs,
+        selectionStart: null,
+        selectionEnd: null,
+        dragging: false,
+        selecting: false,
+        moved: false,
+        pointerX: 0,
+        hitBoxes: [],
+        visibleDepth: Math.max(Number(timeline.max_depth) || 0, 0),
+      };
+      const colors = {
+        stage: ["#dceaff", "#1769e0", "#154f9d"],
+        critical: ["#f05b47", "#d94334", "#ffffff"],
+        target: ["#cfe2ff", "#1769e0", "#124d9b"],
+        cross: ["#d8f5f7", "#0796aa", "#086d7b"],
+        system: ["#edf1f6", "#a9b4c3", "#56657a"],
+        "frame-actual": ["#c8f0ee", "#07968f", "#08706c"],
+        "frame-expected": ["#f3fbfc", "#65b7bd", "#387b80"],
+        "render-frame": ["#087d78", "#05645f", "#ffffff"],
+        "state-running": ["#bfe7d1", "#18815a", "#176b4c"],
+        "state-runnable": ["#ffe2a7", "#b8750b", "#825508"],
+        "state-sleep": ["#dce3ec", "#8795a8", "#526176"],
+        "state-blocked": ["#ffd2cc", "#e44c3b", "#9f3024"],
+        "state-other": ["#eef1f5", "#a9b4c3", "#56657a"],
+        "wakeup-source": ["#ffe1ad", "#d77a0b", "#824805"],
+        "wakeup-target": ["#bdeee7", "#078f82", "#05655d"],
+      };
+      const callstackPalette = [
+        "#5b8ff9", "#5ad8a6", "#5d7092", "#f6bd16", "#e8684a",
+        "#6dc8ec", "#9270ca", "#ff9d4d", "#269a99", "#ff99c3",
+        "#7e8ef1", "#9bca63", "#f08bb4", "#b6a2de", "#5ab1ef",
+        "#ffb980", "#d87a80", "#8d98b3", "#e5cf0d", "#97b552",
+      ];
+      const cpuPalette = [
+        "#227c9d", "#17a398", "#4c956c", "#7a9e35",
+        "#c98b2e", "#d46f4c", "#b85c86", "#8064a2",
+        "#3973b8", "#398c83", "#678d58", "#9a7b34",
+      ];
+      const labelWidth = 208;
+      const axisHeight = 42;
+      const minimapHeight = 28;
+      const rightPad = 14;
+
+      function isEvidenceItem(item) {
+        const detail = item && item.detail;
+        return Boolean(
+          detail && (
+            detail.evidence_id ||
+            (Array.isArray(detail.evidence_ids) && detail.evidence_ids.length) ||
+            (Array.isArray(detail.candidate_reasons) && detail.candidate_reasons.length) ||
+            detail.map_id
+          )
+        );
+      }
+
+      function normalizeSliceColorKey(label) {
+        return String(label || "unnamed")
+          .replace(/^H:/, "")
+          .replace(/\|[IM]\d+$/i, "")
+          .replace(/0x[0-9a-f]+/gi, "0x#")
+          .replace(/\b\d{4,}\b/g, "#")
+          .replace(/#[0-9]+/g, "#")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function stableHash(value) {
+        let hash = 2166136261;
+        for (let index = 0; index < value.length; index += 1) {
+          hash ^= value.charCodeAt(index);
+          hash = Math.imul(hash, 16777619);
+        }
+        return hash >>> 0;
+      }
+
+      function mixHex(left, right, ratio) {
+        const parse = (hex) => [
+          parseInt(hex.slice(1, 3), 16),
+          parseInt(hex.slice(3, 5), 16),
+          parseInt(hex.slice(5, 7), 16),
+        ];
+        const a = parse(left);
+        const b = parse(right);
+        const mixed = a.map((value, index) => Math.round(
+          value + (b[index] - value) * ratio
+        ));
+        return "#" + mixed.map((value) => value.toString(16).padStart(2, "0")).join("");
+      }
+
+      function callstackColors(item) {
+        const key = normalizeSliceColorKey(item.label);
+        const base = callstackPalette[stableHash(key) % callstackPalette.length];
+        const depth = Math.max(Number(item.depth) || 0, 0);
+        const depthTint = 0.14 + (depth % 4) * 0.045;
+        return [
+          mixHex(base, "#ffffff", depthTint),
+          mixHex(base, "#152a46", 0.18),
+          mixHex(base, "#102033", 0.58),
+        ];
+      }
+
+      function cpuColors(item) {
+        const cpu = Number(item.detail && item.detail.cpu);
+        const index = Number.isFinite(cpu)
+          ? Math.abs(Math.trunc(cpu)) % cpuPalette.length
+          : 0;
+        const base = cpuPalette[index];
+        return [
+          mixHex(base, "#ffffff", 0.20),
+          mixHex(base, "#102438", 0.16),
+          mixHex(base, "#071923", 0.70),
+        ];
+      }
+
+      function isVisible(item) {
+        if ((Number(item.depth) || 0) > state.visibleDepth) return false;
+        if (timelineFilter === "critical") {
+          return [
+            "critical", "target", "frame-actual", "render-frame",
+            "wakeup-source", "wakeup-target",
+          ].includes(item.role);
+        }
+        return timelineFilter !== "evidence" || isEvidenceItem(item);
+      }
+
+      function laneHeight(lane) {
+        if (lane.kind === "target" && Number.isFinite(Number(lane.max_depth))) {
+          return Math.max(
+            42 + Math.min(Number(lane.max_depth), state.visibleDepth) * 16,
+            42
+          );
+        }
+        return Math.max(Number(lane.height) || 38, 38);
+      }
+
+      function logicalSize() {
+        const width = Math.max(root.clientWidth, 720);
+        const bodyHeight = (timeline.lanes || []).reduce(
+          (sum, lane) => sum + laneHeight(lane),
+          0
+        );
+        return { width, height: axisHeight + bodyHeight + minimapHeight };
+      }
+
+      function plotWidth(width) {
+        return Math.max(width - labelWidth - rightPad, 120);
+      }
+
+      function xForTime(ms, width) {
+        return labelWidth + (
+          (ms - state.viewStart) / (state.viewEnd - state.viewStart)
+        ) * plotWidth(width);
+      }
+
+      function timeForX(x, width) {
+        const ratio = (x - labelWidth) / plotWidth(width);
+        return state.viewStart + ratio * (state.viewEnd - state.viewStart);
+      }
+
+      function niceStep(span, targetTicks) {
+        const rough = span / Math.max(targetTicks, 1);
+        const power = Math.pow(10, Math.floor(Math.log10(Math.max(rough, 0.000001))));
+        const scaled = rough / power;
+        const factor = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10;
+        return factor * power;
+      }
+
+      function clampView(start, end) {
+        const minSpan = Math.min(totalMs, 0.1);
+        let span = Math.max(end - start, minSpan);
+        span = Math.min(span, totalMs);
+        let nextStart = start;
+        if (nextStart < 0) nextStart = 0;
+        if (nextStart + span > totalMs) nextStart = totalMs - span;
+        state.viewStart = Math.max(0, nextStart);
+        state.viewEnd = state.viewStart + span;
+      }
+
+      function roundedRect(ctx, x, y, width, height, radius) {
+        const r = Math.min(radius, width / 2, height / 2);
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + width, y, x + width, y + height, r);
+        ctx.arcTo(x + width, y + height, x, y + height, r);
+        ctx.arcTo(x, y + height, x, y, r);
+        ctx.arcTo(x, y, x + width, y, r);
+        ctx.closePath();
+      }
+
+      function draw() {
+        const { width, height } = logicalSize();
+        const ratio = window.devicePixelRatio || 1;
+        canvas.width = Math.round(width * ratio);
+        canvas.height = Math.round(height * ratio);
+        canvas.style.height = height + "px";
+        const ctx = canvas.getContext("2d");
+        ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+        ctx.clearRect(0, 0, width, height);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, width, height);
+
+        const pWidth = plotWidth(width);
+        const viewSpan = state.viewEnd - state.viewStart;
+        ctx.fillStyle = "#f6f8fb";
+        ctx.fillRect(0, 0, width, axisHeight);
+        ctx.strokeStyle = "#dfe5ed";
+        ctx.beginPath();
+        ctx.moveTo(0, axisHeight - 0.5);
+        ctx.lineTo(width, axisHeight - 0.5);
+        ctx.moveTo(labelWidth - 0.5, 0);
+        ctx.lineTo(labelWidth - 0.5, height - minimapHeight);
+        ctx.stroke();
+        ctx.fillStyle = "#7a8799";
+        ctx.font = "600 10px ui-monospace, SFMono-Regular, Consolas, monospace";
+        ctx.fillText("EVIDENCE LANES", 14, 25);
+
+        const tickStep = niceStep(viewSpan, Math.max(4, Math.floor(pWidth / 140)));
+        const firstTick = Math.ceil(state.viewStart / tickStep) * tickStep;
+        ctx.font = "10px ui-monospace, SFMono-Regular, Consolas, monospace";
+        ctx.textAlign = "center";
+        for (let tick = firstTick; tick <= state.viewEnd + tickStep * 0.01; tick += tickStep) {
+          const x = xForTime(tick, width);
+          ctx.strokeStyle = "rgba(32, 60, 96, 0.09)";
+          ctx.beginPath();
+          ctx.moveTo(x + 0.5, axisHeight);
+          ctx.lineTo(x + 0.5, height - minimapHeight);
+          ctx.stroke();
+          ctx.fillStyle = "#68778c";
+          ctx.fillText(formatMs(tick), x, 24);
+        }
+        ctx.textAlign = "left";
+
+        const boxesById = new Map();
+        const drawItems = [];
+        state.hitBoxes = [];
+        let y = axisHeight;
+        (timeline.lanes || []).forEach((lane, laneIndex) => {
+          const rowHeight = laneHeight(lane);
+          ctx.fillStyle = laneIndex % 2 ? "#fbfcfe" : "#ffffff";
+          ctx.fillRect(0, y, width, rowHeight);
+          ctx.fillStyle = lane.kind === "target" ? "#edf4ff" : "#f7f9fc";
+          ctx.fillRect(0, y, labelWidth, rowHeight);
+          if (
+            lane.key === "main-thread-callstack" &&
+            Number.isFinite(Number(lane.max_depth))
+          ) {
+            const depthCount = Math.min(
+              Number(lane.max_depth),
+              state.visibleDepth
+            );
+            for (let depthIndex = 0; depthIndex <= depthCount; depthIndex += 1) {
+              const depthY = y + 5 + depthIndex * 16;
+              if (depthIndex % 2 === 1) {
+                ctx.fillStyle = "rgba(23, 105, 224, 0.035)";
+                ctx.fillRect(labelWidth, depthY, width - labelWidth, 16);
+              }
+              ctx.strokeStyle = "rgba(44, 68, 101, 0.10)";
+              ctx.beginPath();
+              ctx.moveTo(labelWidth, depthY + 15.5);
+              ctx.lineTo(width, depthY + 15.5);
+              ctx.stroke();
+              ctx.fillStyle = "#8a96a7";
+              ctx.font = "8px ui-monospace, SFMono-Regular, Consolas, monospace";
+              ctx.textAlign = "right";
+              ctx.fillText(`D${depthIndex}`, labelWidth - 8, depthY + 11);
+              ctx.textAlign = "left";
+            }
+          }
+          ctx.strokeStyle = "#e2e7ee";
+          ctx.beginPath();
+          ctx.moveTo(0, y + rowHeight - 0.5);
+          ctx.lineTo(width, y + rowHeight - 0.5);
+          ctx.stroke();
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(10, y + 3, labelWidth - 20, rowHeight - 6);
+          ctx.clip();
+          ctx.fillStyle = lane.kind === "target" ? "#174f98" : "#27374d";
+          ctx.font = "650 11px Inter, system-ui, sans-serif";
+          ctx.fillText(lane.label || "未命名泳道", 14, y + 17);
+          ctx.fillStyle = "#8a96a7";
+          ctx.font = "9px ui-monospace, SFMono-Regular, Consolas, monospace";
+          ctx.fillText(lane.sublabel || "", 14, y + 31);
+          ctx.restore();
+
+          (lane.items || []).forEach((item) => {
+            itemById.set(item.id, item);
+            if (!isVisible(item)) return;
+            const itemStart = Number(item.start_ms) || 0;
+            const itemEnd = itemStart + Math.max(Number(item.duration_ms) || 0, 0.001);
+            if (itemEnd < state.viewStart || itemStart > state.viewEnd) return;
+            const x1 = Math.max(labelWidth, xForTime(itemStart, width));
+            const x2 = Math.min(width - rightPad, xForTime(itemEnd, width));
+            const itemDepth = Math.min(
+              Math.max(Number(item.depth) || 0, 0),
+              state.visibleDepth
+            );
+            const blockY = y + 7 + itemDepth * 16;
+            const box = {
+              x: x1,
+              y: blockY,
+              width: Math.max(x2 - x1, 3),
+              height: 14,
+              item,
+            };
+            boxesById.set(item.id, box);
+            drawItems.push(box);
+            state.hitBoxes.push(box);
+          });
+          y += rowHeight;
+        });
+
+        (timeline.links || []).forEach((link) => {
+          const source = boxesById.get(link.source);
+          const target = boxesById.get(link.target);
+          if (!source || !target) return;
+          const x1 = source.x + source.width;
+          const y1 = source.y + source.height / 2;
+          const x2 = target.x;
+          const y2 = target.y + target.height / 2;
+          const middle = x1 + (x2 - x1) * 0.52;
+          ctx.strokeStyle = "rgba(7, 150, 143, 0.74)";
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.bezierCurveTo(middle, y1, middle, y2, x2, y2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        });
+
+        drawItems.forEach((box) => {
+          const detailType = box.item.detail && box.item.detail.type;
+          const itemColors = detailType === "main-thread-slice"
+            ? callstackColors(box.item)
+            : (
+              detailType === "cpu-running"
+                ? cpuColors(box.item)
+                : (colors[box.item.role] || colors.system)
+            );
+          roundedRect(ctx, box.x, box.y, box.width, box.height, 3);
+          ctx.fillStyle = itemColors[0];
+          ctx.fill();
+          ctx.strokeStyle = itemColors[1];
+          ctx.lineWidth = box.item.role === "critical" ? 1.5 : 1;
+          ctx.stroke();
+          if (box.width > 24) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(box.x + 3, box.y, box.width - 6, box.height);
+            ctx.clip();
+            ctx.fillStyle = itemColors[2];
+            ctx.font = "600 9px Inter, system-ui, sans-serif";
+            ctx.fillText(box.item.label || "", box.x + 5, box.y + 10.5);
+            ctx.restore();
+          }
+        });
+
+        (timeline.boundaries || []).forEach((boundary) => {
+          const boundaryMs = totalMs * (Number(boundary.position) || 0) / 100;
+          if (boundaryMs < state.viewStart || boundaryMs > state.viewEnd) return;
+          const x = xForTime(boundaryMs, width);
+          ctx.strokeStyle = boundary.kind === "presentation" ? "#087d78" : "#1769e0";
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          ctx.moveTo(x + 0.5, axisHeight);
+          ctx.lineTo(x + 0.5, height - minimapHeight);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          const label = boundary.label || "边界";
+          ctx.font = "700 9px Inter, system-ui, sans-serif";
+          const labelWidthPx = ctx.measureText(label).width + 12;
+          const labelX = Math.max(labelWidth + 2, Math.min(x - labelWidthPx / 2, width - rightPad - labelWidthPx));
+          roundedRect(ctx, labelX, axisHeight + 3, labelWidthPx, 16, 4);
+          ctx.fillStyle = boundary.kind === "presentation" ? "#087d78" : "#1769e0";
+          ctx.fill();
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(label, labelX + 6, axisHeight + 14);
+        });
+
+        if (state.selectionStart !== null && state.selectionEnd !== null) {
+          const selectionStart = Math.min(state.selectionStart, state.selectionEnd);
+          const selectionEnd = Math.max(state.selectionStart, state.selectionEnd);
+          const x1 = xForTime(selectionStart, width);
+          const x2 = xForTime(selectionEnd, width);
+          ctx.fillStyle = "rgba(23, 105, 224, 0.10)";
+          ctx.fillRect(x1, axisHeight, x2 - x1, height - axisHeight - minimapHeight);
+          ctx.strokeStyle = "rgba(23, 105, 224, 0.75)";
+          ctx.strokeRect(x1 + 0.5, axisHeight + 0.5, x2 - x1 - 1, height - axisHeight - minimapHeight - 1);
+        }
+
+        const miniY = height - minimapHeight;
+        ctx.fillStyle = "#f4f7fa";
+        ctx.fillRect(0, miniY, width, minimapHeight);
+        ctx.strokeStyle = "#dfe5ed";
+        ctx.beginPath();
+        ctx.moveTo(0, miniY + 0.5);
+        ctx.lineTo(width, miniY + 0.5);
+        ctx.stroke();
+        ctx.fillStyle = "#7a8799";
+        ctx.font = "600 9px ui-monospace, SFMono-Regular, Consolas, monospace";
+        ctx.fillText("TRACE LENS", 14, miniY + 18);
+        const miniX = labelWidth;
+        const miniWidth = pWidth;
+        ctx.fillStyle = "#dce4ee";
+        ctx.fillRect(miniX, miniY + 10, miniWidth, 7);
+        const lensX = miniX + state.viewStart / totalMs * miniWidth;
+        const lensWidth = Math.max((state.viewEnd - state.viewStart) / totalMs * miniWidth, 4);
+        roundedRect(ctx, lensX, miniY + 7, lensWidth, 13, 4);
+        ctx.fillStyle = "rgba(23, 105, 224, 0.78)";
+        ctx.fill();
+
+        const status = document.getElementById("timeline-status");
+        if (status) {
+          status.textContent = `${formatMs(state.viewStart)} — ${formatMs(state.viewEnd)} · ${(totalMs / viewSpan).toFixed(1)}×`;
+        }
+      }
+
+      function canvasPoint(event) {
+        const rect = canvas.getBoundingClientRect();
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      }
+
+      function hitAt(point) {
+        return [...state.hitBoxes].reverse().find((box) => (
+          point.x >= box.x && point.x <= box.x + box.width &&
+          point.y >= box.y && point.y <= box.y + box.height
+        ));
+      }
+
+      function zoom(factor, centerMs) {
+        const span = state.viewEnd - state.viewStart;
+        const nextSpan = Math.max(0.1, Math.min(totalMs, span * factor));
+        const center = Number.isFinite(centerMs) ? centerMs : (state.viewStart + state.viewEnd) / 2;
+        const ratio = span > 0 ? (center - state.viewStart) / span : 0.5;
+        clampView(center - nextSpan * ratio, center + nextSpan * (1 - ratio));
+        draw();
+      }
+
+      canvas.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        const point = canvasPoint(event);
+        if (point.x < labelWidth) return;
+        zoom(event.deltaY < 0 ? 0.78 : 1.28, timeForX(point.x, logicalSize().width));
+      }, { passive: false });
+
+      canvas.addEventListener("pointerdown", (event) => {
+        const point = canvasPoint(event);
+        if (point.x < labelWidth) return;
+        canvas.focus();
+        canvas.setPointerCapture(event.pointerId);
+        state.pointerX = point.x;
+        state.moved = false;
+        if (event.shiftKey) {
+          state.selecting = true;
+          state.selectionStart = timeForX(point.x, logicalSize().width);
+          state.selectionEnd = state.selectionStart;
+        } else {
+          state.dragging = true;
+          canvas.classList.add("is-panning");
+        }
+      });
+
+      canvas.addEventListener("pointermove", (event) => {
+        const point = canvasPoint(event);
+        const width = logicalSize().width;
+        if (state.dragging) {
+          const delta = point.x - state.pointerX;
+          if (Math.abs(delta) > 1) state.moved = true;
+          const timeDelta = -delta / plotWidth(width) * (state.viewEnd - state.viewStart);
+          clampView(state.viewStart + timeDelta, state.viewEnd + timeDelta);
+          state.pointerX = point.x;
+          draw();
+          return;
+        }
+        if (state.selecting) {
+          state.selectionEnd = Math.max(0, Math.min(totalMs, timeForX(point.x, width)));
+          state.moved = true;
+          draw();
+          return;
+        }
+        const hit = hitAt(point);
+        if (!hit) {
+          tooltip.hidden = true;
+          return;
+        }
+        tooltip.hidden = false;
+        tooltip.replaceChildren();
+        const tooltipTitle = document.createElement("strong");
+        tooltipTitle.textContent = hit.item.label || "时间线事件";
+        const tooltipMeta = document.createElement("span");
+        tooltipMeta.textContent = `start ${formatMs(hit.item.start_ms)} · duration ${formatMs(hit.item.duration_ms)}`;
+        tooltip.append(tooltipTitle, tooltipMeta);
+        tooltip.style.left = Math.min(point.x + 14, root.clientWidth - 350) + "px";
+        tooltip.style.top = Math.max(4, point.y - 44) + "px";
+      });
+
+      canvas.addEventListener("pointerup", (event) => {
+        const point = canvasPoint(event);
+        if (state.selecting) {
+          state.selecting = false;
+          const start = Math.min(state.selectionStart, state.selectionEnd);
+          const end = Math.max(state.selectionStart, state.selectionEnd);
+          if (end - start > 0.05) clampView(start, end);
+          draw();
+        } else if (state.dragging) {
+          state.dragging = false;
+          canvas.classList.remove("is-panning");
+          if (!state.moved) {
+            const hit = hitAt(point);
+            if (hit) {
+              openDrawer(
+                hit.item.label || "时间线事件",
+                `start ${formatMs(hit.item.start_ms)} · duration ${formatMs(hit.item.duration_ms)}`,
+                hit.item.detail || hit.item
+              );
+            }
+          }
+        }
+      });
+
+      canvas.addEventListener("pointercancel", () => {
+        state.dragging = false;
+        state.selecting = false;
+        canvas.classList.remove("is-panning");
+      });
+
+      canvas.addEventListener("dblclick", (event) => {
+        const hit = hitAt(canvasPoint(event));
+        if (!hit) {
+          clampView(0, totalMs);
+        } else {
+          const start = Number(hit.item.start_ms) || 0;
+          const duration = Math.max(Number(hit.item.duration_ms) || 0.1, 0.1);
+          const padding = Math.max(duration * 0.35, 0.1);
+          clampView(start - padding, start + duration + padding);
+        }
+        draw();
+      });
+
+      canvas.addEventListener("keydown", (event) => {
+        const span = state.viewEnd - state.viewStart;
+        if (event.key.toLowerCase() === "w") zoom(0.78);
+        else if (event.key.toLowerCase() === "s") zoom(1.28);
+        else if (event.key.toLowerCase() === "a") {
+          clampView(state.viewStart - span * 0.18, state.viewEnd - span * 0.18);
+          draw();
+        } else if (event.key.toLowerCase() === "d") {
+          clampView(state.viewStart + span * 0.18, state.viewEnd + span * 0.18);
+          draw();
+        } else return;
+        event.preventDefault();
+      });
+
+      draw();
+      return {
+        draw,
+        resize: draw,
+        fit() {
+          state.selectionStart = null;
+          state.selectionEnd = null;
+          clampView(0, totalMs);
+          draw();
+        },
+        zoomIn() { zoom(0.78); },
+        zoomOut() { zoom(1.28); },
+        setDepth(depth) {
+          state.visibleDepth = Math.max(
+            0,
+            Math.min(Number(timeline.max_depth) || 0, Number(depth) || 0)
+          );
+          draw();
+        },
+      };
+    }
+
+    function renderCanvasTimeline() {
+      const root = document.getElementById("timeline-chart");
+      if (!root) return;
+      canvasController = createCanvasTimeline(root);
+    }
+
+    document.querySelectorAll("[data-timeline-filter]").forEach((button) => {
+      button.addEventListener("click", () => {
+        timelineFilter = button.dataset.timelineFilter;
+        document.querySelectorAll("[data-timeline-filter]").forEach((candidate) => {
+          candidate.classList.toggle("active", candidate === button);
+        });
+        if (canvasController) canvasController.draw();
+      });
+    });
+
+    document.querySelectorAll("[data-timeline-action]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (!canvasController) return;
+        if (button.dataset.timelineAction === "zoom-in") canvasController.zoomIn();
+        else if (button.dataset.timelineAction === "zoom-out") canvasController.zoomOut();
+        else canvasController.fit();
+      });
+    });
+
+    const timelineDepth = document.getElementById("timeline-depth");
+    if (timelineDepth) {
+      timelineDepth.addEventListener("input", () => {
+        const output = document.getElementById("timeline-depth-value");
+        if (output) output.value = timelineDepth.value;
+        if (canvasController) canvasController.setDepth(timelineDepth.value);
+      });
+    }
+
+    document.querySelectorAll("[data-evidence-id]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const evidence = evidenceById.get(button.dataset.evidenceId);
+        if (!evidence) {
+          openDrawer(button.dataset.evidenceId, "报告引用了该证据，但当前内嵌数据中没有对应记录。", {});
+          return;
+        }
+        openDrawer(
+          evidence.evidence_id + " · " + evidence.tool,
+          evidence.summary,
+          evidence.data
+        );
+      });
+    });
+
+    document.querySelectorAll("[data-close-drawer]").forEach((button) => {
+      button.addEventListener("click", closeDrawer);
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeDrawer();
+    });
+
+    window.addEventListener("resize", () => {
+      if (canvasController) requestAnimationFrame(canvasController.resize);
+      if (perfFlameController) requestAnimationFrame(perfFlameController.resize);
+    });
+    renderPerfVisuals();
+    renderCanvasTimeline();
+  </script>
+</body>
+</html>

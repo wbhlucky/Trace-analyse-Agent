@@ -1,0 +1,4 @@
+interface:
+  display_name: "Perf Sample Analysis"
+  short_description: "Correlate Perf samples with Trace timing and scheduling"
+  default_prompt: "Analyze valid Perf samples inside the selected Trace interval and correlate hotspots with the critical path."
