@@ -1509,7 +1509,7 @@ class AnalysisResultValidator:
                 issues.error(
                     "perf",
                     "perf_analysis_required",
-                    "Trace 包含有效 Perf 样本，Qoder 分析必须返回 perf 结构",
+                    "Trace 包含有效 Perf 样本，严格模式必须返回 perf 结构",
                 )
             else:
                 issues.warning(

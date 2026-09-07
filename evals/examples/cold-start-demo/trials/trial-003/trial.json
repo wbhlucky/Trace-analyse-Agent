@@ -1,0 +1,57 @@
+{
+  "trial_id": "cold-start-001-trial-003",
+  "case_id": "cold-start-001",
+  "run": {
+    "agent_version": "1.7.2",
+    "model": "deepseek-v4-flash-pg",
+    "temperature": 0.2,
+    "seed": 99
+  },
+  "environment": {
+    "trace_version": 3,
+    "tool_version": 8,
+    "parser_version": 5,
+    "timeout": 600
+  },
+  "trajectory": {
+    "turns": 11,
+    "tool_calls": [
+      {
+        "tool": "get_trace_overview",
+        "args": {},
+        "result": "trace_range 63.7s~78.3s"
+      },
+      {
+        "tool": "query_trace_sql",
+        "args": {
+          "sql": "select ts,name from callstack"
+        },
+        "result": "LaunchAbility 959ms"
+      }
+    ],
+    "final_answer": "根因是 LaunchAbility 同步求值，但时间窗口引用有误。",
+    "root_cause": "SYNC_MODULE_EVALUATION_ON_MAIN_THREAD",
+    "metrics": {
+      "startup_duration_ms": 1533.7,
+      "presentation_duration_ms": 1549.4
+    }
+  },
+  "grading": {
+    "deterministic": {
+      "root_cause": 1.0,
+      "evidence": 0.5,
+      "metrics": 1.0
+    },
+    "llm": {
+      "reasoning": 3,
+      "evidence_grounding": 3,
+      "report_quality": 3
+    },
+    "overall_score": 0.78
+  },
+  "status": {
+    "success": true,
+    "pass": false,
+    "failure_category": "EVIDENCE_ERROR"
+  }
+}

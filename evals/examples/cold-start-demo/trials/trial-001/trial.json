@@ -1,0 +1,71 @@
+{
+  "trial_id": "cold-start-001-trial-001",
+  "case_id": "cold-start-001",
+  "run": {
+    "agent_version": "1.7.2",
+    "model": "deepseek-v4-flash-pg",
+    "temperature": 0.2,
+    "seed": 42
+  },
+  "environment": {
+    "trace_version": 3,
+    "tool_version": 8,
+    "parser_version": 5,
+    "timeout": 600
+  },
+  "trajectory": {
+    "turns": 12,
+    "tool_calls": [
+      {
+        "tool": "get_trace_overview",
+        "args": {},
+        "result": "trace_range 63.7s~78.3s"
+      },
+      {
+        "tool": "inspect_cold_start_candidates",
+        "args": {
+          "max_candidates": 20
+        },
+        "result": "wechat pid=11550 itid=2165"
+      },
+      {
+        "tool": "query_trace_sql",
+        "args": {
+          "sql": "select ts,name from callstack ..."
+        },
+        "result": "AppSpawn Hook 68.6708s"
+      },
+      {
+        "tool": "inspect_thread_execution",
+        "args": {
+          "itid": 2165
+        },
+        "result": "cpu-bound ~85%"
+      }
+    ],
+    "final_answer": "冷启动主要瓶颈为 LaunchAbility 阶段主线程同步求值 EntryAbility.abc（约 858.7ms）。",
+    "root_cause": "SYNC_MODULE_EVALUATION_ON_MAIN_THREAD",
+    "metrics": {
+      "startup_duration_ms": 1533.7,
+      "presentation_duration_ms": 1549.4
+    }
+  },
+  "grading": {
+    "deterministic": {
+      "root_cause": 1.0,
+      "evidence": 0.9,
+      "metrics": 1.0
+    },
+    "llm": {
+      "reasoning": 4,
+      "evidence_grounding": 5,
+      "report_quality": 4
+    },
+    "overall_score": 0.93
+  },
+  "status": {
+    "success": true,
+    "pass": true,
+    "failure_category": null
+  }
+}

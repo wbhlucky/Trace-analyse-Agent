@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import threading
+from typing import Any
+
 from rich.console import Console
 from rich.markup import escape
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from trace_agent.progress import ProgressEvent, ProgressStatus
+from trace_agent.runtime.events import AgentEvent, EventType
+from trace_agent.runtime.event_bus import (
+    EventSubscription,
+    TraceAgentEventBus,
+)
 
 
 _TOOL_LABELS = {
@@ -25,7 +33,13 @@ _TOOL_LABELS = {
 class CliProgressRenderer:
     """Render one live current operation plus durable completion records."""
 
-    def __init__(self, console: Console | None = None) -> None:
+    def __init__(
+        self,
+        console: Console | None = None,
+        *,
+        event_bus: TraceAgentEventBus | None = None,
+        run_id: str | None = None,
+    ) -> None:
         self._console = console or Console(stderr=True)
         self._progress = Progress(
             SpinnerColumn(),
@@ -39,6 +53,10 @@ class CliProgressRenderer:
             total=None,
         )
         self._started = False
+        self._event_bus = event_bus
+        self._run_id = run_id
+        self._subscription: EventSubscription | None = None
+        self._drain_thread: threading.Thread | None = None
 
     def start(self) -> None:
         if self._started:
@@ -51,6 +69,140 @@ class CliProgressRenderer:
             return
         self._progress.stop()
         self._started = False
+
+    def subscribe_events(
+        self,
+        event_bus: TraceAgentEventBus,
+        run_id: str,
+    ) -> None:
+        """Begin streaming runtime AgentEvents to the same console.
+
+        Model deltas, tool chips and phase transitions are rendered as
+        multi-line output alongside the transient progress spinner. The
+        drain thread owns nothing and only performs console writes, so a
+        slow terminal can neither block nor break the analysis worker.
+        """
+        self._event_bus = event_bus
+        self._run_id = run_id
+        self._subscription = self._event_bus.subscribe(run_id)
+        self._drain_thread = threading.Thread(
+            target=self._drain_events,
+            name="cli-event-renderer",
+            daemon=True,
+        )
+        self._drain_thread.start()
+
+    def _drain_events(self) -> None:
+        if self._subscription is None:
+            return
+        while True:
+            event = self._subscription.queue.get()
+            if event is None:
+                return
+            try:
+                self.render_event(event)
+            except Exception:
+                continue
+
+    def render_event(self, event: AgentEvent) -> None:
+        if event.type is EventType.MODEL_MESSAGE_DELTA:
+            text = str(event.data.get("delta", "")).rstrip()
+            if text:
+                self._console.print(
+                    f"[dim bold]{'模型'}[/dim bold] {escape(text)}"
+                )
+            return
+
+        if event.type is EventType.TOOL_STARTED:
+            detail = (
+                event.data.get("arguments")
+                or event.data.get("activity")
+                or ""
+            )
+            self._render_tool_line(
+                "",
+                f"{'调用'} {event.tool_name or '工具'}",
+                detail,
+            )
+            return
+
+        if event.type is EventType.TOOL_COMPLETED:
+            self._render_tool_line(
+                "✓",
+                f"{'完成'} {event.tool_name or '工具'}",
+                "",
+            )
+            return
+
+        if event.type is EventType.TOOL_FAILED:
+            self._render_tool_line(
+                "✗",
+                f"{'失败'} {event.tool_name or '工具'}",
+                str(event.data.get("error") or ""),
+            )
+            return
+
+        if event.type is EventType.EVIDENCE_CREATED:
+            self._render_tool_line(
+                "◇",
+                f"{'证据'} {event.data.get('evidence_id', '')}",
+                str(event.data.get("message") or ""),
+            )
+            return
+
+        if event.type is EventType.PHASE_STARTED:
+            self._console.print(
+                f"[cyan]{'阶段'}[/cyan] "
+                f"{escape(str(event.data.get('message') or event.phase or ''))}"
+            )
+            return
+
+        if event.type is EventType.PHASE_COMPLETED:
+            self._console.print(
+                f"[green]{'阶段完成'}[/green] "
+                f"{escape(str(event.data.get('message') or event.phase or ''))}"
+            )
+            return
+
+        if event.type is EventType.RUN_FAILED:
+            self._console.print(
+                f"[red]{'运行失败'}[/red] "
+                f"{escape(str(event.data.get('error') or ''))}"
+            )
+            return
+
+        if event.type is EventType.RUN_INTERRUPTED:
+            self._console.print(
+                f"[yellow]{'运行已中断'}[/yellow] "
+                f"{escape(str(event.data.get('error') or ''))}"
+            )
+            return
+
+        if event.type is EventType.RUN_COMPLETED:
+            self._console.print(f"[green]{'运行完成'}[/green]")
+            return
+
+    def _render_tool_line(
+        self,
+        marker: str,
+        label: str,
+        detail: Any | None,
+    ) -> None:
+        suffix = ""
+        if detail:
+            detail_text = str(detail).strip()
+            if detail_text:
+                suffix = f" {chr(183)} {escape(detail_text)}"
+        marker_segment = f"{marker} " if marker else ""
+        self._console.print(
+            f"[cyan]{marker_segment}[/cyan]{escape(label)}{suffix}"
+        )
+
+    def _stop_drain(self) -> None:
+        if self._subscription is not None:
+            self._subscription.unsubscribe()
+            self._subscription = None
+        self._drain_thread = None
 
     def __call__(self, event: ProgressEvent) -> None:
         label = self._label(event)

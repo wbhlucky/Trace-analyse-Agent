@@ -78,11 +78,13 @@
         <button class="modal-close" id="analyze-close" aria-label="关闭">×</button>
       </div>
       <div class="modal-body">
+        <div class="preflight modal-preflight" id="modal-preflight"></div>
         <form id="analyze-form" autocomplete="off">
           <div class="form-grid">
             <label class="field span2">
               <span>Trace 文件路径 *</span>
               <input type="text" name="trace_path" required placeholder="例如 D:\traces\case.htrace">
+<span class="field-hint"></span>
             </label>
             <label class="field">
               <span>问题类型 *</span>
@@ -103,10 +105,12 @@
             <label class="field">
               <span>场景描述 *</span>
               <input type="text" name="scenario" required placeholder="例如：点击进入详情页">
+<span class="field-hint"></span>
             </label>
             <label class="field">
               <span>问题现象 *</span>
               <input type="text" name="symptom" required placeholder="例如：点击后约 2 秒页面才稳定">
+<span class="field-hint"></span>
             </label>
             <label class="field">
               <span>Trace ID（可选）</span>
@@ -115,6 +119,7 @@
             <label class="field">
               <span>问题时长 ms（可选）</span>
               <input type="number" name="problem_duration_ms" min="0.001" step="any" placeholder="例如 2000">
+<span class="field-hint"></span>
             </label>
             <label class="field span2">
               <details open>

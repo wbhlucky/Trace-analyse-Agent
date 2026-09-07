@@ -1,0 +1,130 @@
+﻿# 冷启动回归 case：微信 (.tencent.wechat) 冷启动耗时分析
+#
+# 顶层必须符合 Pydantic `Case`：id / input / metadata / gold。
+# gold 必须符合 `Gold`：
+#   root_causes / bottlenecks / evidence / metrics /
+#   uncertainty_topics / uncertainty_status / forbidden_conclusions / severity
+#
+# metrics 只填 grader 能识别的字段（见 grader._metric_values）：
+#   startup_duration_ms  -> cold_start.total_duration_ms
+#   presentation_duration_ms -> cold_start.presentation_duration_ms
+# 阶段级指标（LaunchAbility / EntryAbility / APP_COMPONENT_LOAD 等）
+# 改为 evidence 触发词，因为证据匹配是按切片名称在结果文本里找子串。
+#
+# 金标数值与仓库内实际分析结果对齐：
+#   results/analyze-cold-start-hiprofiler_data_new-431d6a/findings.json
+
+id: cold_start_001
+
+input:
+  trace: D:\Users\Administrator\Desktop\trace\hiprofiler_data_new.htrace
+  type: cold-start
+  scenario: 微信应用冷启动过慢
+  symptom: 点开微信后过了好几秒才完全启动
+
+metadata:
+  suite: regression
+  difficulty: medium
+  tags:
+    - cold-start
+    - wechat
+    - sync-module-evaluation
+
+gold:
+  # 根因：主线程同步求值业务模块（cpu-bound，非等待）
+  root_causes:
+    - id: RC001
+      canonical: sync_module_evaluation_on_main_thread
+      aliases:
+        - SYNC_MODULE_EVALUATION_ON_MAIN_THREAD
+        - 同步求值
+        - 模块求值
+        - EntryAbility.abc
+        - WXAbilityStage.abc
+    - id: RC002
+      canonical: app_component_load_cpu_bound_on_main_thread
+      component: app_component_load
+      aliases:
+        - APP_COMPONENT_LOAD
+        - 组件加载
+        - 页面构建
+        - HomeService.HomePage
+
+  # 瓶颈：主线程同步执行拖慢 LaunchAbility / APP_COMPONENT_LOAD
+  bottlenecks:
+    - canonical: main_thread_sync_evaluation
+      component: launch_ability
+      aliases:
+        - LaunchAbility
+        - 同步求值
+        - 主线程同步执行
+    - canonical: app_component_load_main_thread_block
+      component: app_component_load
+      aliases:
+        - APP_COMPONENT_LOAD
+        - 组件加载阻塞
+        - 页面切换
+
+  # 证据：切片名称必须在 Agent 输出的 summary/classification/critical_path/
+  #   stage.assessment/findings 中出现
+  evidence:
+    - type: slice
+      name: LaunchAbility
+      thread: main
+      relation: supports_root_cause
+    - type: slice
+      name: ExecuteModuleBufferSecure
+      thread: main
+      relation: supports_root_cause
+    - type: slice
+      name: APP_COMPONENT_LOAD
+      thread: main
+      relation: supports_bottleneck
+    - type: slice
+      name: EntryAbility.abc
+      thread: main
+      relation: supports_root_cause
+    - type: slice
+      name: WXAbilityStage.abc
+      thread: main
+      relation: supports_root_cause
+
+  # 只填 grader 可识别的端到端指标
+  metrics:
+    startup_duration_ms:
+      value: 4038.739
+      tolerance_ms: 50
+    presentation_duration_ms:
+      value: 1549.428
+      tolerance_ms: 20
+
+  severity: high
+
+  # uncertainty：关键结论最高为 suspected，按 structured topic 比较
+  uncertainty_status: suspected
+  uncertainty_topics:
+    - topic: no_app_startup_labels
+      aliases:
+        - app_startup 表为空
+        - 无 SmartPerf 阶段标签
+        - 阶段由 callstack 重建
+    - topic: launch_without_click_marker
+      aliases:
+        - 无用户点击 Marker
+        - AppSpawn 孵化 Hook
+        - 起点为 AppSpawn
+    - topic: completion_boundary_approximate
+      aliases:
+        - 无业务完成 Marker
+        - 结构近似
+        - 首页可用语义未证实
+        - suspected
+    - topic: no_baseline_comparison
+      aliases:
+        - 无 baseline
+        - 不能判断相对回归
+
+  forbidden_conclusions:
+    - Flutter raster 执行是主要瓶颈
+    - 主线程等待 binder 是主要根因
+    - 主线程长时间 Sleep/IO 等待是冷启动慢的根因

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import queue
 import threading
@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Protocol
 
 from trace_agent.runtime.events import AgentEvent, EventType
+from trace_agent.runtime.sink import EventSink
 
 
 class EventStore(Protocol):
@@ -41,16 +42,21 @@ class TraceAgentEventBus:
         self._subscribers: dict[str, set[EventSubscription]] = {}
         self._lock = threading.Lock()
         self._max_subscriber_queue = max_subscriber_queue
+        self._sinks: list[EventSink] = []
+
+    def register_sink(self, sink: EventSink) -> None:
+        with self._lock:
+            self._sinks.append(sink)
 
     def publish(
         self,
         event: AgentEvent,
     ) -> AgentEvent:
-        """Assign the next run cursor and fan out to subscribers.
+        """Assign the next run cursor and fan out to subscribers and sinks.
 
-        Subscriber delivery and persistence are intentionally best-effort:
-        an event must be accepted by the bus but a slow or failed consumer must
-        never interrupt the analysis worker.
+        Subscriber delivery, sinks and persistence are intentionally
+        best-effort: an event must be accepted by the bus but a slow or failed
+        consumer must never interrupt the analysis worker.
         """
         run_id = event.run_id
         with self._lock:
@@ -62,6 +68,9 @@ class TraceAgentEventBus:
             for subscription in self._subscribers.get(run_id, ()):
                 self._offer(subscription.queue, event)
             store = self._store
+            sinks = list(self._sinks)
+        for sink in sinks:
+            self._emit_sink(sink, event)
         self._write_store(store, event)
         return event
 
@@ -71,11 +80,7 @@ class TraceAgentEventBus:
         *,
         from_seq: int = 0,
     ) -> EventSubscription:
-        """Replay history and continue receiving live events on one queue.
-
-        History replay and live registration happen under the same lock, so
-        there is no gap or duplicated event across refresh/reconnect.
-        """
+        """Replay history and continue receiving live events on one queue."""
         live_queue: queue.Queue[AgentEvent | None] = queue.Queue(
             maxsize=self._max_subscriber_queue
         )
@@ -114,7 +119,8 @@ class TraceAgentEventBus:
             return []
 
     def register_store(self, store: EventStore) -> None:
-        self._store = store
+        with self._lock:
+            self._store = store
 
     def _discard(
         self,
@@ -125,9 +131,14 @@ class TraceAgentEventBus:
             subscribers = self._subscribers.get(run_id)
             if not subscribers:
                 return
-            subscribers.discard(
-                EventSubscription(run_id, live_queue)
-            )
+            matches = [
+                subscription
+                for subscription in subscribers
+                if subscription.run_id == run_id
+                and subscription.queue is live_queue
+            ]
+            for subscription in matches:
+                subscribers.discard(subscription)
 
     def _offer(
         self,
@@ -142,6 +153,13 @@ class TraceAgentEventBus:
                 live_queue.put_nowait(event)
             except (queue.Empty, queue.Full):
                 return
+
+    @staticmethod
+    def _emit_sink(sink: EventSink, event: AgentEvent) -> None:
+        try:
+            sink.emit(event)
+        except Exception:
+            return
 
     @staticmethod
     def _write_store(store: EventStore | None, event: AgentEvent) -> None:

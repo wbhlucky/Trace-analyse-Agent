@@ -3,24 +3,30 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
+import threading
 import traceback
 from pathlib import Path
 from typing import Annotated
+from uuid import uuid4
 
 import typer
 
 from trace_agent import __version__
 from trace_agent.agent import DefaultAnalysisAgentFactory
+from trace_agent.agent.registry import metadata_for_kind
 from trace_agent.application import AnalyzeApplication
 from trace_agent.cli_progress import CliProgressRenderer
 from trace_agent.config import LlmRuntimeConfig, save_project_llm_config
-from trace_agent.errors import AgentFailure, classify_exception
+from trace_agent.errors import AgentFailure, RunInterrupted, classify_exception
+from trace_agent.eval.cli import eval_app
 from trace_agent.models import (
     AgentKind,
     AnalyzeRequest,
     LlmProvider,
     ScenarioType,
 )
+from trace_agent.runtime import get_event_bus
 from trace_agent.trace import HTraceAdapter
 from trace_agent.web import serve as serve_web
 
@@ -89,6 +95,50 @@ def _print_failure(
         typer.echo("  提示: 使用 --show-traceback 查看完整调用栈")
 
 
+async def _run_with_cancel(
+    application: AnalyzeApplication,
+    request: AnalyzeRequest,
+    *,
+    cancel_event: threading.Event,
+    resume_from: str | None,
+    run_id: str | None,
+):
+    """Run the application and hard-cancel the worker on an interrupt.
+
+    ``application.run`` is cooperative, but a blocking SDK transport may not
+    observe ``cancel_event`` between awaits. Running it as a Task and
+    cancelling that Task on a signal gives us guaranteed, prompt interruption
+    (Claude Code-style Ctrl+C semantics).
+    """
+
+    async def _work():
+        return await application.run(
+            request,
+            resume_from=resume_from,
+            run_id=run_id,
+            cancel_event=cancel_event,
+        )
+
+    task = asyncio.create_task(_work())
+
+    async def _watch():
+        await asyncio.to_thread(cancel_event.wait)
+        if not task.done():
+            task.cancel()
+
+    watcher = asyncio.create_task(_watch())
+    try:
+        return await task
+    except asyncio.CancelledError as exc:
+        raise RunInterrupted(run_id=run_id) from exc
+    finally:
+        watcher.cancel()
+        try:
+            await watcher
+        except (asyncio.CancelledError, Exception):
+            pass
+
+
 @app.callback()
 def main(
     version: Annotated[
@@ -108,7 +158,7 @@ def main(
 def configure(
     provider: Annotated[
         LlmProvider,
-        typer.Option("--provider", help="Qoder BYOK 模型 Provider。"),
+        typer.Option("--provider", help="BYOK 模型 Provider。"),
     ] = LlmProvider.DEEPSEEK,
     model: Annotated[
         str | None,
@@ -129,7 +179,7 @@ def configure(
     except ValueError as exc:
         typer.secho(f"配置失败：{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
-    typer.secho("Qoder BYOK 配置完成", fg=typer.colors.GREEN)
+    typer.secho("BYOK 配置完成", fg=typer.colors.GREEN)
     typer.echo(f"Provider: {provider.value}")
     typer.echo(f"配置文件: {path.resolve()}")
 
@@ -276,7 +326,7 @@ def analyze(
         LlmProvider | None,
         typer.Option(
             "--provider",
-            help="Qoder BYOK 模型 Provider；默认读取项目 .env。",
+            help="BYOK 模型 Provider；默认读取项目 .env。",
         ),
     ] = None,
     model: Annotated[
@@ -336,9 +386,23 @@ def analyze(
             help="失败时显示完整 Python 调用栈以辅助定位问题。",
         ),
     ] = False,
+    run_id: Annotated[
+        str | None,
+        typer.Option(
+            "--run-id",
+            help="复用指定 Run ID；与 --resume 搭配可续跑被中断的分析。",
+        ),
+    ] = None,
+    resume: Annotated[
+        str | None,
+        typer.Option(
+            "--resume",
+            help="从指定步骤续跑（例如 agent.analyze）；自动延续已有 run.json。",
+        ),
+    ] = None,
 ) -> None:
     llm_config: LlmRuntimeConfig | None = None
-    if agent is AgentKind.QODER:
+    if metadata_for_kind(agent).requires_model_auth:
         try:
             llm_config = LlmRuntimeConfig.resolve(
                 project_root=Path.cwd(),
@@ -377,7 +441,24 @@ def analyze(
         model=model,
     )
 
-    progress_renderer = CliProgressRenderer() if progress else None
+    event_bus = get_event_bus()
+
+    resolved_run_id = run_id
+    if resolved_run_id is None and resume is not None:
+        manifest_path = output.expanduser().resolve() / "run.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            resolved_run_id = manifest.get("run_id")
+        except (OSError, ValueError, TypeError):
+            resolved_run_id = None
+    if resolved_run_id is None:
+        resolved_run_id = f"run-{uuid4().hex[:12]}"
+
+    progress_renderer = (
+        CliProgressRenderer(event_bus=event_bus, run_id=resolved_run_id)
+        if progress
+        else None
+    )
     application = AnalyzeApplication(
         trace_adapter=HTraceAdapter(
             trace_streamer_path=trace_streamer,
@@ -394,12 +475,40 @@ def analyze(
             llm_config=llm_config,
         ),
         progress_callback=progress_renderer,
+        event_bus=event_bus,
     )
 
     if progress_renderer is not None:
         progress_renderer.start()
+        progress_renderer.subscribe_events(event_bus, resolved_run_id)
+
+    cancel_event = threading.Event()
+
+    def _request_cancel(signum, frame) -> None:
+        del signum, frame
+        typer.echo()
+        typer.secho(
+            "收到中断信号，正在取消分析任务...",
+            fg=typer.colors.YELLOW,
+        )
+        cancel_event.set()
+
+    previous_sigint = signal.signal(signal.SIGINT, _request_cancel)
+
     try:
-        result = asyncio.run(application.run(request))
+        result = asyncio.run(
+            _run_with_cancel(
+                application,
+                request,
+                cancel_event=cancel_event,
+                resume_from=resume,
+                run_id=resolved_run_id,
+            )
+        )
+    except RunInterrupted as exc:
+        typer.secho("分析已取消", fg=typer.colors.YELLOW)
+        typer.echo(f"Run ID: {exc.run_id or resolved_run_id}")
+        raise typer.Exit(code=130) from exc
     except Exception as exc:
         _print_failure(
             exc,
@@ -407,11 +516,17 @@ def analyze(
             show_traceback=show_traceback,
         )
         raise typer.Exit(code=1) from exc
-
     finally:
+        signal.signal(signal.SIGINT, previous_sigint)
         if progress_renderer is not None:
+            progress_renderer._stop_drain()
             progress_renderer.stop()
 
     typer.secho("分析完成", fg=typer.colors.GREEN)
     typer.echo(f"Run ID: {result.run_id}")
     typer.echo(f"报告: {result.report_path}")
+
+
+
+
+app.add_typer(eval_app)

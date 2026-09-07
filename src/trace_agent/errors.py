@@ -123,6 +123,15 @@ class AgentRetryExhausted(AgentFailure):
         super().__init__(message, category=category, **kwargs)
 
 
+
+class ProviderUnavailable(AgentFailure):
+    """A provider/agent adapter or its optional SDK is unavailable."""
+
+    def __init__(self, message: str, *, provider: str | None = None, **kwargs: Any) -> None:
+        self.provider = provider
+        super().__init__(message, category=ErrorCategory.USER_RECOVERABLE, **kwargs)
+
+
 async def async_retry(
     operation: Callable[[], Awaitable[_T]],
     *,

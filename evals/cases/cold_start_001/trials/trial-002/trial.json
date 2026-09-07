@@ -1,0 +1,58 @@
+﻿{
+  "trial_id": "cold_start_001-trial-002",
+  "case_id": "cold_start_001",
+  "run": {
+    "agent_version": "1.7.2",
+    "model": "deepseek-v4-flash-pg",
+    "temperature": 0.3,
+    "seed": 7
+  },
+  "environment": {
+    "trace_version": 3,
+    "tool_version": 8,
+    "parser_version": 5,
+    "timeout": 600
+  },
+  "trajectory": {
+    "turns": 10,
+    "tool_calls": [
+      { "tool": "get_trace_overview", "args": {}, "result": "trace_range 63.7449s~78.3091s" },
+      { "tool": "inspect_cold_start_candidates", "args": { "max_candidates": 20 }, "result": "wechat ipid=236 pid=11550 main_itid=2165" },
+      { "tool": "inspect_cold_start_timeline", "args": { "ipid": 236 }, "result": "AppSpawnExecuteClearEnvHook 68670797385ns" },
+      { "tool": "inspect_thread_execution", "args": { "itid": 2165 }, "result": "LaunchAbility Running 815.5ms cpu-bound" }
+    ],
+    "final_answer": "微信冷启动主因是 LaunchAbility 同步求值 958.5ms 与 APP_COMPONENT_LOAD 组件加载，根因正确但总时长口径取错为 4569.0ms。",
+    "root_cause": "SYNC_MODULE_EVALUATION_ON_MAIN_THREAD",
+    "boundaries": {
+      "start_ns": 68670797385,
+      "presentation_ns": 70220224989,
+      "stable_frame_end_ns": 72709535926
+    },
+    "metrics": {
+      "total_duration_ms": 4569.0,
+      "presentation_duration_ms": 1549.428,
+      "launch_ability_duration_ms": 958.5,
+      "entry_ability_eval_duration_ms": 858.8,
+      "app_component_load_duration_ms": 2564.102
+    }
+  },
+  "grading": {
+    "deterministic": {
+      "root_cause": 1.0,
+      "evidence": 0.75,
+      "metrics": 0.5,
+      "boundary": 0.85
+    },
+    "llm": {
+      "reasoning": 3,
+      "evidence_grounding": 4,
+      "report_quality": 3
+    },
+    "overall_score": 0.72
+  },
+  "status": {
+    "success": true,
+    "pass": false,
+    "failure_category": "METRIC_ERROR"
+  }
+}

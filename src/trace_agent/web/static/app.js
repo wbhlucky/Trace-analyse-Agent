@@ -7,6 +7,7 @@ const state = {
   query: "",
   runningJobs: [],
   jobEvents: {},
+  preflight: null,
 };
 
 const els = {
@@ -36,6 +37,14 @@ const els = {
   panelEvidence: document.getElementById("panel-evidence"),
   panelRun: document.getElementById("panel-run"),
   panelJson: document.getElementById("panel-json"),
+  emptyBody: document.querySelector("#empty-state"),
+  preflightBox: null,
+  scenarioType: null,
+  scenario: null,
+  symptom: null,
+  problemDuration: null,
+  tracePath: null,
+  fields: {},
 };
 
 const SEVERITY_LABEL = {
@@ -49,6 +58,15 @@ const STATUS_LABEL = {
   completed: "已完成",
   failed: "失败",
   running: "运行中",
+};
+const STEP_LABELS = {
+  "prepare.trace": "准备 Trace",
+  "prepare": "准备",
+  "discover": "发现候选",
+  "analyze": "性能分析",
+  "root-cause": "根因归因",
+  "evidence": "证据核验",
+  "report": "报告生成",
 };
 
 function escapeHtml(value) {
@@ -116,6 +134,7 @@ function sevClass(sev) {
 }
 
 function statusClass(status) {
+  if (status === "done") return "completed";
   return ["completed", "failed", "running"].includes(status) ? status : "none";
 }
 
@@ -129,6 +148,72 @@ async function fetchJson(url) {
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
+}
+
+const CHECK_STATUS_LABEL = {
+  ok: "\u5c31\u7eea",
+  warn: "\u9700\u6ce8\u610f",
+  error: "\u672a\u914d\u7f6e",
+};
+
+async function loadPreflight() {
+  try {
+    state.preflight = await fetchJson("/api/preflight");
+  } catch (err) {
+    state.preflight = null;
+  }
+  renderPreflight();
+  renderEmptyState();
+}
+
+function renderPreflight() {
+  const data = state.preflight;
+  const containers = [
+    els.preflightBox,
+    document.getElementById("modal-preflight"),
+  ].filter(Boolean);
+  if (!containers.length) return;
+  if (!data || !data.checks) {
+    containers.forEach((container) => { container.innerHTML = ""; });
+    return;
+  }
+  const rows = data.checks.map((check) => `
+    <li class="preflight-item ${check.status}">
+      <span class="preflight-dot"></span>
+      <div class="preflight-copy">
+        <div class="preflight-label">${escapeHtml(check.label)}</div>
+        <div class="preflight-detail">${escapeHtml(check.detail)}</div>
+        ${check.action ? `<div class="preflight-action">${escapeHtml(check.action)}</div>` : ""}
+      </div>
+      <span class="pill status-badge ${check.status === "ok" ? "completed" : check.status === "warn" ? "running" : "failed"}">${escapeHtml(CHECK_STATUS_LABEL[check.status] || check.status)}</span>
+    </li>`).join("");
+  const html = `
+    <div class="preflight-head">
+      <span>环境自检</span>
+      <span class="preflight-summary">${escapeHtml(data.summary || "")}</span>
+    </div>
+    <ul class="preflight-list">${rows}</ul>`;
+  containers.forEach((container) => { container.innerHTML = html; });
+}
+
+function renderEmptyState() {
+  const el = els.emptyBody;
+  if (!el) return;
+  const data = state.preflight;
+  const checks = data && data.checks ? data.checks : [];
+  const ready = data ? data.ready : false;
+  const badge = !data
+    ? '<span class="pill status-badge failed">\u65e0\u6cd5\u81ea\u68c0</span>'
+    : ready
+      ? '<span class="pill status-badge completed">\u73af\u5883\u5c31\u7eea</span>'
+      : '<span class="pill status-badge running">\u90e8\u5206\u7f3a\u5931</span>';
+  el.innerHTML = `
+    <div class="empty-glow">\u8c03</div>
+    <h1>${checks.some((c) => c.status === "error") ? "\u5148\u8865\u5168\u914d\u7f6e\uff0c\u518d\u5f00\u59cb\u5206\u6790" : "\u9009\u62e9\u6216\u53d1\u8d77\u4e00\u4e2a\u5206\u6790\u7528\u4f8b"}</h1>
+    <p>\u5de6\u4fa7\u5217\u51fa <code>results/</code> \u4e0b\u7684\u5206\u6790\u7ed3\u679c\uff1b\u70b9\u51fb\u201c\u53d1\u8d77\u5206\u6790\u201d\u63d0\u4ea4\u65b0\u7684 Agent \u4efb\u52a1\u3002</p>
+    <div class="preflight" id="preflight-box">${badge}</div>`;
+  els.preflightBox = document.getElementById("preflight-box");
+  renderPreflight();
 }
 
 async function loadCases() {
@@ -146,7 +231,11 @@ async function loadCases() {
     }
   } catch (err) {
     setServerStatus("err", "连接失败");
-    els.empty.querySelector("p").textContent = "无法连接到面板服务。请确认已运行 serve 命令。";
+    const emptyEl = els.emptyBody;
+    if (emptyEl) {
+      emptyEl.querySelector("h1").textContent = "无法连接到面板服务";
+      emptyEl.querySelector("p").textContent = "请确认已运行 serve 命令，然后刷新页面。";
+    }
   }
 }
 
@@ -387,12 +476,13 @@ function renderFindings(findings) {
     return (rank[b.severity] || 0) - (rank[a.severity] || 0);
   });
   els.panelFindings.innerHTML = `<div class="grid finding">${sorted.map(findingCard).join("")}</div>`;
+  attachFindingLinks(els.panelFindings);
 }
 
 function findingCard(f) {
   const sev = f.severity || "low";
   const conf = f.confidence != null ? Math.round(Number(f.confidence) * 100) : null;
-  const evidence = (f.evidence_ids || []).map((id) => `<span class="chip">${escapeHtml(id)}</span>`).join("");
+  const evidence = (f.evidence_ids || []).map((id) => `<button type="button" class="chip link" data-jump-evidence="${escapeHtml(id)}">${escapeHtml(id)} \u2192</button>`).join("");
   return `
   <div class="card finding-card ${sevClass(sev)}">
     <div class="finding-head">
@@ -410,6 +500,25 @@ function findingCard(f) {
   </div>`;
 }
 
+function jumpToEvidence(id) {
+  switchTab("evidence");
+  if (!state.bundle) return;
+  els.panelEvidence.querySelectorAll("[data-evidence-id]").forEach((node) => {
+    const match = node.dataset.evidenceId === String(id);
+    node.classList.toggle("flash", match);
+    if (match) {
+      setTimeout(() => node.scrollIntoView({ behavior: "smooth", block: "nearest" }), 30);
+      setTimeout(() => node.classList.remove("flash"), 1600);
+    }
+  });
+}
+
+function attachFindingLinks(root) {
+  root.querySelectorAll("[data-jump-evidence]").forEach((btn) => {
+    btn.addEventListener("click", () => jumpToEvidence(btn.dataset.jumpEvidence));
+  });
+}
+
 function field(label, value) {
   if (!value) return "";
   return `<div class="finding-body"><div class="label">${escapeHtml(label)}</div><p>${escapeHtml(value)}</p></div>`;
@@ -422,7 +531,7 @@ function renderEvidence(evidence) {
     return;
   }
   els.panelEvidence.innerHTML = items.map((ev) => `
-    <div class="card evidence-card">
+    <div class="card evidence-card" data-evidence-id="${escapeHtml(ev.evidence_id || "\u2014")}">
       <div class="evidence-head">
         <span class="evidence-identity">${escapeHtml(ev.evidence_id || "—")}</span>
         <span class="evidence-tool">${escapeHtml(ev.tool || "")}</span>
@@ -430,6 +539,51 @@ function renderEvidence(evidence) {
       <p class="evidence-summary">${escapeHtml(ev.summary || "")}</p>
       <pre class="json">${escapeHtml(pretty(ev.data))}</pre>
     </div>`).join("");
+}
+
+const STEP_STATUS_LABEL = {
+  done: "\u5df2\u5b8c\u6210",
+  running: "\u8fd0\u884c\u4e2d",
+  failed: "\u5931\u8d25",
+  pending: "\u7b49\u5f85\u4e2d",
+  skipped: "\u5df2\u8df3\u8fc7",
+};
+
+function renderActivityTimeline(run) {
+  const steps = Array.isArray(run.step_states) ? run.step_states : [];
+  const phases = steps.filter((st) => st && st.step);
+  if (!phases.length) return "";
+  const labelOf = (st) => {
+    const step = String(st.step || "");
+    return STEP_LABELS[step] || step;
+  };
+  const elapsed = (st) => {
+    const a = parseIso(st.started_at);
+    const b = parseIso(st.completed_at);
+    if (a && b) return formatDuration(Math.max(0, (b.getTime() - a.getTime()) / 1000));
+    return st.started_at ? "\u8fdb\u884c\u4e2d" : "";
+  };
+  const items = phases.map((st) => {
+    const status = st.status || "pending";
+    const dur = elapsed(st);
+    return `
+    <li class="timeline-item ${status}">
+      <span class="timeline-marker"></span>
+      <div class="timeline-copy">
+        <div class="timeline-head">
+          <span class="timeline-step">${escapeHtml(labelOf(st))}</span>
+          <span class="pill status-badge ${statusClass(status)}">${escapeHtml(STEP_STATUS_LABEL[status] || status)}</span>
+          ${dur ? `<span class="timeline-duration">${escapeHtml(dur)}</span>` : ""}
+        </div>
+        ${st.error ? `<div class="timeline-error">${escapeHtml(st.error)}</div>` : ""}
+      </div>
+    </li>`;
+  }).join("");
+  return `
+    <div class="card wide">
+      <h3>Agent \u6d3b\u52a8\u65f6\u95f4\u7ebf</h3>
+      <ul class="timeline">${items}</ul>
+    </div>`;
 }
 
 function renderRun(run) {
@@ -483,7 +637,8 @@ function renderRun(run) {
     extra += `<div class="section-head">Trace 转换</div><div class="grid">${convHtml}</div>`;
   }
 
-  els.panelRun.innerHTML = `<div class="grid"><div class="card wide">${body}</div></div>${extra}`;
+  const timeline = renderActivityTimeline(run);
+  els.panelRun.innerHTML = `${timeline}<div class="grid"><div class="card wide">${body}</div></div>${extra}`;
 }
 
 function renderJson(bundle) {
@@ -663,6 +818,8 @@ function applyJobEvent(jobId, event, lastEventId) {
   if (event.type === "phase.started") {
     live.phase = event.phase || live.phase;
     live.phaseMessage = data.message || live.phaseMessage;
+    live.modelText = "";
+    live.tools = [];
   } else if (event.type === "phase.completed") {
     live.phase = event.phase || live.phase;
   } else if (event.type === "tool.started" && event.tool_name) {
@@ -687,7 +844,7 @@ function applyJobEvent(jobId, event, lastEventId) {
     }
     live.tools.reverse();
   } else if (event.type === "model.message.delta") {
-    live.modelText += data.delta || "";
+    live.modelText = (live.modelText + (data.delta || "")).slice(-12000);
   } else if (event.type === "run.started" || event.type === "phase.started") {
     live.phase = event.phase || live.phase;
   }
@@ -811,8 +968,9 @@ function renderJobLive(jobId) {
   const phase = live.phase
     ? `<div class="job-live-phase">phase: ${escapeHtml(live.phase || "")}${live.phaseMessage ? ` \u00b7 ${escapeHtml(live.phaseMessage)}` : ""}</div>`
     : "";
-  const tools = live.tools.length
-    ? `<div class="job-live-tools">${live.tools.map((tool) => `<div class="job-tool-chip status-${escapeHtml(tool.status)}"><b>${escapeHtml(tool.name)}</b>${toolSummary(tool) ? ` ? ${escapeHtml(toolSummary(tool))}` : ""}</div>`).join("")}</div>`
+  const latestTool = live.tools.length ? live.tools[live.tools.length - 1] : null;
+  const tools = latestTool
+    ? `<div class="job-live-tools"><div class="job-tool-chip status-${escapeHtml(latestTool.status)}"><b>${escapeHtml(latestTool.name)}</b>${toolSummary(latestTool) ? ` · ${escapeHtml(toolSummary(latestTool))}` : ""}</div></div>`
     : "";
   const model = live.modelText
     ? `<pre class="job-live-model">${escapeHtml(live.modelText)}</pre>`
@@ -823,6 +981,7 @@ function renderJobLive(jobId) {
 
 els.analyzeForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!validateAnalyzeForm()) return;
   const formData = new FormData(els.analyzeForm);
   const payload = {};
   for (const [key, value] of formData.entries()) {
@@ -836,7 +995,7 @@ els.analyzeForm.addEventListener("submit", async (event) => {
     }
   }
   els.analyzeSubmit.disabled = true;
-  els.analyzeSubmit.textContent = "????";
+  els.analyzeSubmit.textContent = "\u63d0\u4ea4\u4e2d\u2026";
   clearAnalyzeError();
   try {
     const res = await fetch("/api/analyze", {
@@ -853,7 +1012,7 @@ els.analyzeForm.addEventListener("submit", async (event) => {
     showAnalyzeError(err);
   } finally {
     els.analyzeSubmit.disabled = false;
-    els.analyzeSubmit.textContent = "????";
+    els.analyzeSubmit.textContent = "\u63d0\u4ea4\u4e2d\u2026";
   }
 });
 
@@ -868,9 +1027,94 @@ function showAnalyzeError(err) {
     console.error(err);
     return;
   }
-  const message = String((err && err.message) || err || "??????");
+  const message = String((err && err.message) || err || "\u53d1\u751f\u672a\u77e5\u9519\u8bef");
   els.analyzeError.textContent = message;
   els.analyzeError.classList.remove("hidden");
 }
 
+
+function bindFormFields() {
+  els.analyzeForm.querySelectorAll("input, select").forEach((node) => {
+    if (node.name) els.fields[node.name] = node;
+  });
+  els.scenarioType = els.fields.scenario_type;
+  els.scenario = els.fields.scenario;
+  els.symptom = els.fields.symptom;
+  els.problemDuration = els.fields.problem_duration_ms;
+  els.tracePath = els.fields.trace_path;
+}
+
+function fillScenarioTemplate(type) {
+  const tpl = state.preflight && state.preflight.templates
+    ? state.preflight.templates[type]
+    : null;
+  if (!tpl) return;
+  if (els.scenario && !els.scenario.value) els.scenario.value = tpl.scenario || "";
+  if (els.symptom && !els.symptom.value) els.symptom.value = tpl.symptom || "";
+  if (els.problemDuration && !els.problemDuration.value && tpl.problem_duration_ms) {
+    els.problemDuration.value = tpl.problem_duration_ms;
+  }
+}
+
+function validateAnalyzeForm() {
+  let valid = true;
+  let firstInvalid = null;
+  const required = ["trace_path", "scenario_type", "scenario", "symptom"];
+  for (const name of required) {
+    const field = els.fields[name];
+    if (!field) continue;
+    const value = String(field.value || "").trim();
+    field.classList.toggle("invalid", !value);
+    const hint = field.parentElement?.querySelector(".field-hint");
+    if (hint) {
+      hint.textContent = value
+        ? ""
+        : (field === els.tracePath ? "\u8bf7\u586b\u5199 Trace \u6587\u4ef6\u8def\u5f84" : "\u5fc5\u586b\u9879\u4e0d\u80fd\u4e3a\u7a7a");
+    }
+    if (!value) {
+      valid = false;
+      if (!firstInvalid) firstInvalid = field;
+    }
+  }
+  const dur = els.problemDuration;
+  if (dur) {
+    const v = String(dur.value || "").trim();
+    let invalid = false;
+    let hint = "";
+    if (v) {
+      const num = Number(v);
+      if (Number.isNaN(num) || num <= 0 || num > 3600000) {
+        invalid = true;
+        hint = "\u5e94\u4e3a 0\u301c3600000 \u4e4b\u95f4\u7684\u6b63\u6570";
+      }
+    }
+    dur.classList.toggle("invalid", invalid);
+    const dh = dur.parentElement?.querySelector(".field-hint");
+    if (dh) dh.textContent = hint;
+    if (invalid) {
+      valid = false;
+      if (!firstInvalid) firstInvalid = dur;
+    }
+  }
+  if (firstInvalid) firstInvalid.focus();
+  return valid;
+}
+
+function setupFormValidation() {
+  if (els.scenarioType) {
+    els.scenarioType.addEventListener("change", () => {
+      fillScenarioTemplate(els.scenarioType.value);
+    });
+  }
+}
+
+function init() {
+  bindFormFields();
+  setupFormValidation();
+  renderEmptyState();
+  loadPreflight();
+  loadCases();
+}
+
+init();
 

@@ -6,6 +6,7 @@ from trace_agent.config import (
     save_project_llm_config,
 )
 from trace_agent.models import LlmProvider
+from trace_agent.qoder_config import qoder_personal_access_token
 
 
 def test_deepseek_project_config_is_preserved_for_qoder_byok(
@@ -30,10 +31,11 @@ def test_deepseek_project_config_is_preserved_for_qoder_byok(
     config = LlmRuntimeConfig.resolve(project_root=tmp_path)
 
     assert config.provider is LlmProvider.DEEPSEEK
-    assert config.model == "deepseek-v4-pro-pg"
+    assert config.model == "deepseek-v4-pro[1m]"
     assert config.base_url == DEEPSEEK_ANTHROPIC_BASE_URL
     assert config.api_key == "test-secret"
-    assert not config.use_qoder_personal_access_token
+    assert config.model_policy is not None
+    assert qoder_personal_access_token() is None
     assert "test-secret" not in repr(config)
 
 
@@ -62,10 +64,8 @@ def test_qoder_pat_is_independent_from_deepseek_key(
     config = LlmRuntimeConfig.resolve(project_root=tmp_path)
 
     assert config.api_key == "deepseek-secret"
-    assert config.use_qoder_personal_access_token
-    assert config.sdk_environment == {
-        "QODER_PERSONAL_ACCESS_TOKEN": "qoder-secret"
-    }
+    assert qoder_personal_access_token() == "qoder-secret"
+    assert "qoder-secret" not in repr(config)
 
 
 def test_save_project_config_keeps_deepseek_settings(tmp_path) -> None:

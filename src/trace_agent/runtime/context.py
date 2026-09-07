@@ -4,6 +4,7 @@ import threading
 from dataclasses import dataclass, field
 
 from trace_agent.errors import RunInterrupted
+from trace_agent.runtime.cancellation import CancellationToken, Deadline
 from trace_agent.runtime.event_bus import TraceAgentEventBus, get_event_bus
 from trace_agent.runtime.events import EventType, AgentEvent
 
@@ -19,6 +20,7 @@ class RunContext:
     run_id: str
     event_bus: TraceAgentEventBus = field(default_factory=get_event_bus)
     cancel_event: threading.Event = field(default_factory=threading.Event)
+    deadline: Deadline | None = None
 
     def publish(
         self,
@@ -43,6 +45,17 @@ class RunContext:
     def is_cancelled(self) -> bool:
         return self.cancel_event.is_set()
 
+    def remaining_seconds(self) -> float | None:
+        if self.deadline is None:
+            return None
+        return self.deadline.remaining_seconds()
+
+    def deadline_expired(self) -> bool:
+        return self.deadline is not None and self.deadline.expired()
+
     def raise_if_cancelled(self) -> None:
-        if self.is_cancelled():
+        if self.is_cancelled() or self.deadline_expired():
             raise RunInterrupted(run_id=self.run_id)
+
+    def cancellation_token(self) -> CancellationToken:
+        return CancellationToken(self.cancel_event)

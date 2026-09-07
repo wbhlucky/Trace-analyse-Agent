@@ -1,0 +1,57 @@
+﻿{
+  "trial_id": "cold_start_001-trial-003",
+  "case_id": "cold_start_001",
+  "run": {
+    "agent_version": "1.7.2",
+    "model": "deepseek-v4-flash-pg",
+    "temperature": 0.3,
+    "seed": 9
+  },
+  "environment": {
+    "trace_version": 3,
+    "tool_version": 8,
+    "parser_version": 5,
+    "timeout": 600
+  },
+  "trajectory": {
+    "turns": 14,
+    "tool_calls": [
+      { "tool": "get_trace_overview", "args": {}, "result": "trace_range 63.7449s~78.3091s" },
+      { "tool": "inspect_cold_start_candidates", "args": { "max_candidates": 20 }, "result": "wechat ipid=236 pid=11550 main_itid=2165" },
+      { "tool": "query_trace_sql", "args": { "sql": "select ts,dur from callstack where name like '%binder%'" }, "result": "binder transaction rows" }
+    ],
+    "final_answer": "微信冷启动慢的根因是主线程等待 binder 事务，CPU 空闲等待导致启动耗时增加。",
+    "root_cause": "MAIN_THREAD_WAITING_BINDER",
+    "boundaries": {
+      "start_ns": 68670797385,
+      "presentation_ns": 70220224989,
+      "stable_frame_end_ns": 72709535926
+    },
+    "metrics": {
+      "total_duration_ms": 4038.739,
+      "presentation_duration_ms": 1549.428,
+      "launch_ability_duration_ms": 959.151,
+      "entry_ability_eval_duration_ms": 858.8,
+      "app_component_load_duration_ms": 2564.102
+    }
+  },
+  "grading": {
+    "deterministic": {
+      "root_cause": 0.0,
+      "evidence": 0.3,
+      "metrics": 0.9,
+      "boundary": 1.0
+    },
+    "llm": {
+      "reasoning": 2,
+      "evidence_grounding": 2,
+      "report_quality": 2
+    },
+    "overall_score": 0.46
+  },
+  "status": {
+    "success": true,
+    "pass": false,
+    "failure_category": "WRONG_ROOT_CAUSE"
+  }
+}

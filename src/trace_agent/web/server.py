@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import mimetypes
+import os
 import queue
 import socket
 import threading
+import time
 import uuid
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
@@ -19,8 +21,14 @@ from typing import Any
 from rich.console import Console
 
 from trace_agent.agent import DefaultAnalysisAgentFactory
+from trace_agent.agent.registry import metadata_for_kind
 from trace_agent.application import AnalyzeApplication
 from trace_agent.config import LlmRuntimeConfig
+from trace_agent.memory import (
+    SessionMemory,
+    SessionRole,
+    default_memory_runtime,
+)
 from trace_agent.errors import (
     AgentFailure,
     ErrorCategory,
@@ -57,6 +65,29 @@ _SCENARIO_LABELS = {
     "response-latency": "\u54cd\u5e94\u65f6\u5ef6",
     "completion-latency": "\u5b8c\u6210\u65f6\u5ef6",
     "frame-jank": "\u5361\u987f/\u4e22\u5e27",
+}
+
+_SCENARIO_TEMPLATES = {
+    "cold-start": {
+        "scenario": "\u70b9\u51fb\u542f\u52a8\u5e94\u7528\u8fdb\u5165\u9996\u5c4f",
+        "symptom": "\u70b9\u51fb\u540e\u9875\u9762\u957f\u65f6\u95f4\u767d\u5c4f\uff0c\u51b7\u542f\u52a8\u603b\u65f6\u957f\u660e\u663e\u504f\u9ad8",
+        "problem_duration_ms": 2000,
+    },
+    "response-latency": {
+        "scenario": "\u70b9\u51fb\u6309\u94ae\u540e\u7b49\u5f85\u64cd\u4f5c\u54cd\u5e94",
+        "symptom": "\u70b9\u51fb\u540e\u63a7\u4ef6\u65e0\u54cd\u5e94\uff0c\u54cd\u5e94\u65f6\u5ef6\u8fc7\u957f",
+        "problem_duration_ms": 1000,
+    },
+    "completion-latency": {
+        "scenario": "\u70b9\u51fb\u8fdb\u5165\u8be6\u60c5\u9875",
+        "symptom": "\u70b9\u51fb\u540e\u754c\u9762\u5df2\u51fa\u73b0\u4f46\u5185\u5bb9\u4e3a\u957f\u65f6\u95f4\u52a0\u8f7d\uff0c\u5b8c\u6210\u65f6\u5ef6\u8fc7\u957f",
+        "problem_duration_ms": 2000,
+    },
+    "frame-jank": {
+        "scenario": "\u6ed1\u52a8\u5217\u8868\u6216\u8fde\u7eed\u64cd\u4f5c",
+        "symptom": "\u6eda\u52a8/\u70b9\u51fb\u8fc7\u7a0b\u4e2d\u660e\u663e\u5361\u987f\u6216\u4e22\u5e27",
+        "problem_duration_ms": 500,
+    },
 }
 
 
@@ -202,6 +233,73 @@ def _build_bundle(case_dir: Path, case_name: str) -> dict[str, Any]:
     }
 
 
+def _preflight(project_root: Path) -> dict[str, Any]:
+    """Report local runtime readiness without leaking secrets.
+
+    Mirrors the Claude Code / Codex "preflight" gate: the frontend should be
+    able to tell the operator *what* is missing and *how* to fix it before a
+    long-running agent task is submitted, rather than failing mid-run.
+    """
+    checks: list[dict[str, Any]] = []
+    dotenv_path = project_root / ".env"
+    has_dotenv = dotenv_path.is_file()
+
+    def env_value(name: str) -> str | None:
+        return os.environ.get(name)
+
+    agent_session_token = env_value("QODER_PERSONAL_ACCESS_TOKEN")
+    deepseek_key = (
+        env_value("DEEPSEEK_API_KEY")
+        or env_value("ANTHROPIC_AUTH_TOKEN")
+        or env_value("ANTHROPIC_API_KEY")
+    )
+    if has_dotenv:
+        try:
+            for raw_line in dotenv_path.read_text(encoding="utf-8-sig").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                name, raw_value = line.split("=", 1)
+                value = raw_value.strip().strip("'\"").strip("'\"")
+                if name == "QODER_PERSONAL_ACCESS_TOKEN" and value and not agent_session_token:
+                    agent_session_token = value
+                if name in ("DEEPSEEK_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY") and value and not deepseek_key:
+                    deepseek_key = value
+        except OSError:
+            pass
+
+    checks.append({
+        "id": "dotenv",
+        "label": ".env \u914d\u7f6e\u6587\u4ef6",
+        "status": "ok" if has_dotenv else "warn",
+        "detail": "\u5df2\u5b58\u5728" if has_dotenv else "\u5efa\u8bae\u521b\u5efa .env \u5e76\u586b\u5199 DeepSeek Key",
+        "action": None if has_dotenv else "\u521b\u5efa\u9879\u76ee\u6839\u76ee\u5f55\u4e0b\u7684 .env",
+    })
+    checks.append({
+        "id": "deepseek",
+        "label": "DeepSeek API Key",
+        "status": "ok" if deepseek_key else "error",
+        "detail": "\u5df2\u914d\u7f6e" if deepseek_key else "\u672a\u914d\u7f6e DEEPSEEK_API_KEY",
+        "action": None if deepseek_key else "\u5728 .env \u4e2d\u586b\u5199 DEEPSEEK_API_KEY",
+    })
+    checks.append({
+        "id": "agent-session",
+        "label": "Agent \u4f1a\u8bdd\u767b\u5f55",
+        "status": "ok" if agent_session_token else "warn",
+        "detail": "\u5df2\u914d\u7f6e PAT" if agent_session_token else "\u672a\u914d\u7f6e PAT",
+        "action": None if agent_session_token else "\u914d\u7f6e PAT \u540e\u9009\u62e9 SDK Agent",
+    })
+    ok_count = sum(1 for check in checks if check["status"] == "ok")
+    ready = all(check["status"] in ("ok", "warn") for check in checks)
+    return {
+        "ready": ready,
+        "checks": checks,
+        "summary": f"{ok_count}/{len(checks)} \u9879\u5c31\u7eea",
+        "templates": _SCENARIO_TEMPLATES,
+    }
+
+
+
 # Keep a small yet complete public contract for the frontend: state (status),
 # reason (user_message + suggested_action), next action (resumable) and details
 # (a separate diagnostics endpoint). Internal stack traces are never sent to
@@ -220,9 +318,9 @@ class AnalysisJob:
 
 
 _CATEGORY_ACTIONS = {
-    ErrorCategory.RETRYABLE.value: "????????????????????????",
-    ErrorCategory.USER_RECOVERABLE.value: "????????Trace ????? Agent ??????",
-    ErrorCategory.FATAL.value: "???????????????????????",
+    ErrorCategory.RETRYABLE.value: "可重试，请稍后重新运行分析",
+    ErrorCategory.USER_RECOVERABLE.value: "请检查 Trace 参数并重新运行 Agent 分析",
+    ErrorCategory.FATAL.value: "发生内部错误，请查看诊断信息",
 }
 
 
@@ -252,13 +350,13 @@ def _job_error_from_exception(
 
 def _user_message(exc: BaseException, category: ErrorCategory) -> str:
     if isinstance(exc, AgentFailure):
-        return str(exc) or "Agent ?????"
+        return str(exc) or "正在执行 Agent 分析"
     if category is ErrorCategory.RETRYABLE:
-        return "???????????????????"
+        return "遇到临时错误，请稍后重试"
     if category is ErrorCategory.USER_RECOVERABLE:
-        return "?????????????????????"
+        return "输入或配置有误，请修正后重试"
     message = str(exc).strip()
-    return message or "???????????"
+    return message or "分析运行失败"
 
 
 def _last_failed_step(output_dir: Path | None) -> str | None:
@@ -371,9 +469,9 @@ def _run_analysis_job(job: AnalysisJob, project_root: Path, results_root: Path) 
                 stage="run.prepare",
                 retryable=False,
                 resumable=False,
-                user_message="Trace ?????????",
+                user_message="缺少 Trace 路径参数",
                 suggested_action=(
-                    "?????? Trace ????????????"
+                    "请提供有效的 Trace 文件路径"
                 ),
                 trace_id=params.get("trace_id"),
                 internal_detail="trace_path is required",
@@ -390,7 +488,7 @@ def _run_analysis_job(job: AnalysisJob, project_root: Path, results_root: Path) 
         provider = LlmProvider(provider_raw) if provider_raw else None
 
         llm_config: LlmRuntimeConfig | None = None
-        if agent is AgentKind.QODER:
+        if metadata_for_kind(agent).requires_model_auth:
             llm_config = LlmRuntimeConfig.resolve(
                 project_root=project_root,
                 provider=provider,
@@ -453,6 +551,7 @@ def _run_analysis_job(job: AnalysisJob, project_root: Path, results_root: Path) 
                 request,
                 run_id=job.id,
                 cancel_event=job.cancel_event,
+                resume_from=params.get("resume"),
             )
         )
 
@@ -481,6 +580,27 @@ def _run_analysis_job(job: AnalysisJob, project_root: Path, results_root: Path) 
             output_dir=job.output_dir,
         )
 
+
+
+_MEMORY_RUNTIME = None
+_MEMORY_RUNTIME_LOCK = threading.Lock()
+
+def _memory_runtime() -> "default_memory_runtime":
+    global _MEMORY_RUNTIME
+    with _MEMORY_RUNTIME_LOCK:
+        if _MEMORY_RUNTIME is None:
+            _MEMORY_RUNTIME = default_memory_runtime(Path.cwd())
+        return _MEMORY_RUNTIME
+
+def _session_view(session: SessionMemory) -> dict[str, Any]:
+    return session.model_dump(mode="json")
+
+def _run_dream_cycle(project_root: Path) -> None:
+    runtime = _memory_runtime()
+    try:
+        runtime.dreaming.run_once(limit=20)
+    except Exception:
+        return
 
 def _submit_analysis(params: dict[str, Any], project_root: Path, results_root: Path) -> dict[str, Any]:
     job = AnalysisJob(id=f"job-{uuid.uuid4().hex[:12]}", params=params)
@@ -653,6 +773,39 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"status": "ok", "time": datetime.now(timezone.utc).isoformat()})
             return
 
+        if path == "/api/memory/sessions" or path == "/api/memory/sessions/":
+            sessions = _memory_runtime().sessions.list_sessions()
+            self._send_json(
+                {"sessions": [s.model_dump(mode="json") for s in sessions]}
+            )
+            return
+
+        if path.startswith("/api/memory/sessions/"):
+            session_id = path.removeprefix("/api/memory/sessions/").strip("/")
+            session = _memory_runtime().sessions.get_session(session_id)
+            if session is None:
+                self._send_json({"error": "session not found"}, HTTPStatus.NOT_FOUND)
+                return
+            self._send_json({"session": session.model_dump(mode="json")})
+            return
+
+        if path == "/api/memory/recall":
+            from urllib.parse import parse_qs
+            query = parse_qs(parsed.query).get("query", [""])[0]
+            scenario_type = parse_qs(parsed.query).get("scenario_type", [None])[0]
+            result = _memory_runtime().recall(query or "", scenario_type=scenario_type)
+            self._send_json(result.model_dump(mode="json"))
+            return
+
+        if path == "/api/memory/dream":
+            _run_dream_cycle(self.project_root)
+            self._send_json({"status": "ok"})
+            return
+
+        if path == "/api/preflight" or path == "/api/preflight/":
+            self._send_json(_preflight(self.project_root))
+            return
+
         if path == "/api/analyze/jobs" or path == "/api/analyze/jobs/":
             with _JOB_LOCK:
                 jobs = [_job_view(job) for job in _JOBS.values()]
@@ -725,6 +878,49 @@ class DashboardHandler(BaseHTTPRequestHandler):
         cancel_job_id = self._cancel_route_job_id(path)
         if cancel_job_id is not None:
             self._cancel_run(cancel_job_id)
+            return
+
+        if path == "/api/memory/sessions":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            raw = self.rfile.read(length) if length else b""
+            try:
+                body = json.loads(raw.decode("utf-8")) if raw else {}
+            except ValueError:
+                body = {}
+            session = _memory_runtime().sessions.create_session(
+                title=str(body.get("title") or ""),
+                topic=str(body.get("topic") or ""),
+                session_id=body.get("session_id"),
+            )
+            self._send_json({"session": session.model_dump(mode="json")}, HTTPStatus.CREATED)
+            return
+
+        if path.startswith("/api/memory/sessions/") and path.endswith("/messages"):
+            session_id = path.removeprefix("/api/memory/sessions/").removesuffix("/messages").strip("/")
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            raw = self.rfile.read(length) if length else b""
+            try:
+                body = json.loads(raw.decode("utf-8")) if raw else {}
+            except ValueError:
+                body = {}
+            content = str(body.get("content") or "")
+            if not content:
+                self._send_json({"error": "content is required"}, HTTPStatus.BAD_REQUEST)
+                return
+            role = str(body.get("role") or "user")
+            session = _memory_runtime().append_session_message(
+                session_id,
+                content,
+                role=role,
+                references=list(body.get("references") or []),
+            )
+            self._send_json({"session": session.model_dump(mode="json") if session else None})
             return
 
         if path != "/api/analyze":
@@ -806,6 +1002,21 @@ def serve(
         {"results_dir": results_root, "project_root": Path.cwd().resolve()},
     )
     bound_port = _get_free_port(host, port)
+    def _dreaming_loop() -> None:
+        while True:
+            time.sleep(float(os.environ.get("TRACE_AGENT_MEMORY_DREAM_INTERVAL", "30")))
+            try:
+                _memory_runtime().dreaming.run_once(limit=20)
+            except Exception:
+                continue
+
+    dream_thread = threading.Thread(
+        target=_dreaming_loop,
+        name="memory-dreaming",
+        daemon=True,
+    )
+    dream_thread.start()
+
 
     try:
         server = ThreadingHTTPServer((host, bound_port), handler)

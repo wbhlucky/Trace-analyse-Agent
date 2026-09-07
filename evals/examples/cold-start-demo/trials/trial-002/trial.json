@@ -1,0 +1,59 @@
+{
+  "trial_id": "cold-start-001-trial-002",
+  "case_id": "cold-start-001",
+  "run": {
+    "agent_version": "1.7.2",
+    "model": "deepseek-v4-flash-pg",
+    "temperature": 0.2,
+    "seed": 7
+  },
+  "environment": {
+    "trace_version": 3,
+    "tool_version": 8,
+    "parser_version": 5,
+    "timeout": 600
+  },
+  "trajectory": {
+    "turns": 9,
+    "tool_calls": [
+      {
+        "tool": "query_trace_sql",
+        "args": {
+          "sql": "select * from cpu_usage"
+        },
+        "result": "主线程 CPU 高占用"
+      },
+      {
+        "tool": "inspect_thread_execution",
+        "args": {
+          "itid": 2165
+        },
+        "result": "主线程 running 占比高"
+      }
+    ],
+    "final_answer": "主要瓶颈是 CPU 竞争导致启动变慢。",
+    "root_cause": "CPU_CONTENTION",
+    "metrics": {
+      "startup_duration_ms": 1500.0,
+      "presentation_duration_ms": 1500.0
+    }
+  },
+  "grading": {
+    "deterministic": {
+      "root_cause": 0.0,
+      "evidence": 0.3,
+      "metrics": 0.8
+    },
+    "llm": {
+      "reasoning": 2,
+      "evidence_grounding": 2,
+      "report_quality": 2
+    },
+    "overall_score": 0.51
+  },
+  "status": {
+    "success": true,
+    "pass": false,
+    "failure_category": "WRONG_ROOT_CAUSE"
+  }
+}

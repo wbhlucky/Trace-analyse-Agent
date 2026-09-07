@@ -1,0 +1,59 @@
+﻿{
+  "trial_id": "cold_start_001-trial-001",
+  "case_id": "cold_start_001",
+  "run": {
+    "agent_version": "1.7.2",
+    "model": "deepseek-v4-flash-pg",
+    "temperature": 0.2,
+    "seed": 42
+  },
+  "environment": {
+    "trace_version": 3,
+    "tool_version": 8,
+    "parser_version": 5,
+    "timeout": 600
+  },
+  "trajectory": {
+    "turns": 8,
+    "tool_calls": [
+      { "tool": "get_trace_overview", "args": {}, "result": "trace_range 63.7449s~78.3091s" },
+      { "tool": "inspect_cold_start_candidates", "args": { "max_candidates": 20 }, "result": "wechat ipid=236 pid=11550 main_itid=2165" },
+      { "tool": "inspect_cold_start_timeline", "args": { "ipid": 236 }, "result": "AppSpawnExecuteClearEnvHook 68670797385ns" },
+      { "tool": "query_trace_sql", "args": { "sql": "join frame_maps -> frame_slice render_service" }, "result": "src_row=198 -> dst_row=200 (70218201030ns)" },
+      { "tool": "inspect_thread_execution", "args": { "itid": 2165 }, "result": "LaunchAbility Running 815.5ms cpu-bound" }
+    ],
+    "final_answer": "微信冷启动总时长约 4038.7ms（spawn 68.6708s -> 稳定帧 72.7095s）；首帧经 frame_maps 映射到 render_service 呈现终点 70.2202s（presentation_duration 1549.4ms）；主因是主线程同步求值 EntryAbility.abc 858.8ms 与 APP_COMPONENT_LOAD 组件加载 2564.1ms 的 cpu-bound 阻塞。",
+    "root_cause": "SYNC_MODULE_EVALUATION_ON_MAIN_THREAD",
+    "boundaries": {
+      "start_ns": 68670797385,
+      "presentation_ns": 70220224989,
+      "stable_frame_end_ns": 72709535926
+    },
+    "metrics": {
+      "total_duration_ms": 4038.739,
+      "presentation_duration_ms": 1549.428,
+      "launch_ability_duration_ms": 959.151,
+      "entry_ability_eval_duration_ms": 858.8,
+      "app_component_load_duration_ms": 2564.102
+    }
+  },
+  "grading": {
+    "deterministic": {
+      "root_cause": 1.0,
+      "evidence": 0.9,
+      "metrics": 1.0,
+      "boundary": 1.0
+    },
+    "llm": {
+      "reasoning": 4,
+      "evidence_grounding": 5,
+      "report_quality": 4
+    },
+    "overall_score": 0.93
+  },
+  "status": {
+    "success": true,
+    "pass": true,
+    "failure_category": null
+  }
+}

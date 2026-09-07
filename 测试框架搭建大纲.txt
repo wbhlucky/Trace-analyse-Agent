@@ -1,0 +1,855 @@
+
+可以。现在我给你**最终定版**，后面就不要再反复改方向了。
+
+结合你当前的 **Trace Agent + Qoder Agent Runtime + `AgentTransport` + ToolRegistry + SQLite Trace + Memory + Latency Control**，以及 2026 年成熟 Agent Eval 的做法，我建议你把 Eval 做成一个**独立于生产 Agent 的评测层**。Anthropic 目前公开的定义就是 `task → trial → transcript → outcome → grader → evaluation harness → suite`，并明确建议生产 Agent 与被评测 Agent 尽量一致、Trial 隔离、代码评分优先、LLM Judge 辅助；OpenAI 近期也明确强调，Agent 的评测结果受到 harness、工具、上下文管理、重试和评分方式影响，因此 harness 本身就是评测的一部分。([Anthropic][1])
+
+另外，OpenAI 已宣布 2026 年 11 月 30 日后关闭原 Evals/Agent Builder 产品，所以你的项目**不要依赖某一家厂商的 Eval 平台**，自己做轻量、模型无关的 Eval Core 是更稳妥的选择。([OpenAI][2])
+
+# 最终架构
+
+```text
+                         Production Agent
+                               │
+                 ┌─────────────┴─────────────┐
+                 │                           │
+          CLI / Web 正常运行             Eval Harness
+                 │                           │
+                 │                     ┌─────▼─────┐
+                 │                     │ CaseLoader │
+                 │                     └─────┬─────┘
+                 │                           ↓
+                 │                     ┌───────────┐
+                 │                     │ TrialRunner│
+                 │                     └─────┬─────┘
+                 │                           ↓
+                 │                 调用同一个 Agent 入口
+                 │                           │
+                 │                           ▼
+                 │                    Qoder Agent
+                 │                           │
+                 │                ToolRegistry / Runtime
+                 │                           │
+                 │                           ▼
+                 │                    Trial Artifacts
+                 │                           │
+                 │             ┌─────────────┴─────────────┐
+                 │             ↓                           ↓
+                 │     Deterministic Grader          LLM Judge
+                 │             │                           │
+                 │             └─────────────┬─────────────┘
+                 │                           ↓
+                 │                     Score / Report
+                 │
+                 └────── 不允许 Eval 复制一套 Agent 逻辑
+```
+
+## 一、先定死一个原则
+
+**Eval System 不允许自己实现 Agent。**
+
+它只能：
+
+```text
+加载 Case
+→ 准备环境
+→ 调用 Production Agent
+→ 捕获 Trial
+→ Grading
+→ 聚合
+```
+
+也就是说：
+
+```text
+Production:
+CLI → AnalyzeApplication → AgentRuntime → QoderTransport
+
+Eval:
+EvalHarness → AnalyzeApplication → AgentRuntime → QoderTransport
+```
+
+而不是：
+
+```text
+EvalHarness → 自己重新写一套 Qoder 调用逻辑
+```
+
+这个边界非常重要。否则以后 Production Agent 改了，Eval Agent 还是旧的，测出来的结果没有意义。Anthropic 也明确建议 eval 中的 Agent 与实际生产 Agent 尽可能保持一致。([Anthropic][1])
+
+---
+
+# 二、第一阶段先把 6 个 Contract 定死
+
+这是整个项目最优先的事情。
+
+```text
+1. Case
+2. Gold
+3. Agent Output
+4. Trial
+5. Grader Result
+6. Eval Run
+```
+
+### Case
+
+```yaml
+id: cold_start_001
+
+input:
+  trace: fixtures/cold_start_001.htrace
+  type: cold-start
+  scenario: 应用冷启动
+  symptom: 启动耗时增加
+
+metadata:
+  suite: regression
+  difficulty: medium
+  tags:
+    - cold-start
+    - vsync
+```
+
+### Gold
+
+```yaml
+gold:
+  root_causes:
+    - id: RC001
+      type: vsync_distribution
+      component: RenderService
+
+  bottlenecks:
+    - type: vsync
+      component: RenderService
+
+  evidence:
+    - event: SendVsyncTo
+      thread: RenderService
+      relation: supports_root_cause
+
+  metrics:
+    startup_duration_ms:
+      value: 1250
+      tolerance: 20
+
+  uncertainty:
+    - 不足以证明 Flutter 业务代码本身是主要根因
+```
+
+注意：
+
+> **Gold 是“正确性模型”，不是一段参考答案。**
+
+---
+
+# 三、Agent 必须增加一个机器可评分结果
+
+以后 Agent 最终输出必须有：
+
+```json
+{
+  "diagnosis": {
+    "root_causes": [],
+    "bottlenecks": []
+  },
+  "evidence": [],
+  "metrics": {},
+  "reasoning_summary": "",
+  "uncertainty": [],
+  "recommendations": []
+}
+```
+
+最终：
+
+```text
+agent-result.json
+```
+
+这是 Eval 的正式接口。
+
+而：
+
+```text
+report.html
+markdown
+自然语言总结
+```
+
+全部属于展示层。
+
+**这一刀建议现在就做。**
+
+---
+
+# 四、Eval Framework 的最终目录
+
+我建议不要再扩散到项目各处，直接：
+
+```text
+src/trace_agent/eval/
+├── __init__.py
+├── schema.py
+├── loader.py
+├── harness.py
+├── runner.py
+├── isolation.py
+├── artifacts.py
+├── aggregator.py
+├── reporter.py
+│
+└── graders/
+    ├── __init__.py
+    ├── deterministic.py
+    └── llm_judge.py
+```
+
+数据：
+
+```text
+evals/
+├── cases/
+│   ├── regression/
+│   ├── capability/
+│   └── hidden/
+│
+├── fixtures/
+│   └── traces/
+│
+├── runs/
+└── reports/
+```
+
+测试代码：
+
+```text
+tests/
+├── eval_framework/
+└── eval_integration/
+```
+
+---
+
+# 五、第一版真正要实现的模块
+
+## ① `schema.py`
+
+定义：
+
+```text
+EvalCase
+GoldOracle
+Trial
+TrialArtifact
+GraderResult
+EvalResult
+EvalRun
+```
+
+全部 Pydantic。
+
+---
+
+## ② `loader.py`
+
+负责：
+
+```text
+YAML / JSON
+↓
+EvalCase
+↓
+GoldOracle
+```
+
+只负责解析，不跑 Agent。
+
+---
+
+## ③ `isolation.py`
+
+每个 Trial 独立：
+
+```text
+runs/
+  run-xxx/
+    case.json
+    input/
+    workspace/
+    state/
+    transcript.jsonl
+    tool-calls.jsonl
+    agent-result.json
+```
+
+你的：
+
+```text
+Memory
+Cache
+checkpoint
+results
+SQLite
+workspace
+```
+
+必须明确决定哪些复制、哪些清空、哪些只读。
+
+Trial 之间绝对不能串状态。Anthropic 把环境隔离列为 Agent Eval 的关键工程要求之一。([Anthropic][1])
+
+---
+
+## ④ `runner.py`
+
+只做：
+
+```text
+Case
+ ↓
+准备环境
+ ↓
+调用现有 Analyze/Application 入口
+ ↓
+等待完成
+ ↓
+捕获 artifact
+```
+
+**不要在这里写任何业务评分逻辑。**
+
+---
+
+## ⑤ `artifacts.py`
+
+统一保存：
+
+```text
+transcript
+tool_calls
+agent_result
+latency
+token usage
+errors
+runtime metadata
+git commit
+model
+prompt version
+```
+
+以后你才能回答：
+
+> “为什么这次从 91 分掉到 82 分？”
+
+直接打开 Trial 就能定位。
+
+---
+
+# 六、Grader 第一版只做 Deterministic
+
+第一版**不要急着上 LLM Judge**。
+
+直接实现：
+
+```text
+check_root_cause()
+check_bottleneck()
+check_evidence()
+check_metric()
+check_component()
+check_hallucinated_evidence()
+check_schema_validity()
+```
+
+例如：
+
+```text
+Root Cause        1.0
+Evidence          0.8
+Metrics           1.0
+Component         1.0
+```
+
+然后做 Partial Credit。
+
+Anthropic 当前实践同样明确推荐：能代码判断的优先用代码评分，多组件任务使用 partial credit，复杂主观维度再引入 LLM Judge。([Anthropic][1])
+
+---
+
+# 七、测试内容最终分成 3 层，而不是一锅端
+
+这是你之前一直问的“到底测什么”，现在可以正式敲定。
+
+## 第一层：Framework Tests
+
+**目标：证明你的 Eval Framework 没有 Bug。**
+
+先做大约 10 个人工构造 Case：
+
+```text
+F01 Case 正确加载
+F02 Gold 正确加载
+F03 Trial 隔离
+F04 Artifact 正确保存
+F05 Agent 成功运行
+F06 Agent Timeout
+F07 Tool Error
+F08 Agent Crash
+F09 非法 Structured Output
+F10 Grader Partial Credit 正确
+```
+
+这里不用真实复杂 Trace。
+
+它测的是：
+
+> **“我的评测系统能不能可靠地测？”**
+
+---
+
+# 八、第二层：Agent Capability Tests
+
+这才是真正测试你的 Trace Agent。
+
+第一批建议 **10～20 个真实 Trace**。
+
+必须覆盖：
+
+```text
+01 CPU contention
+02 Thread blocking
+03 Binder / IPC
+04 UI scheduling
+05 VSync
+06 RenderService
+07 单一明显瓶颈
+08 多候选瓶颈
+09 多因素竞争
+10 证据不足
+11 证据冲突
+12 表面现象与真正根因分离
+```
+
+这批的目的不是追求 100%。
+
+而是找：
+
+```text
+Agent 到底会在哪类问题上失败
+```
+
+Capability Eval 本来就应该放在 Agent 当前能力边界上，而不是全放简单题。([Anthropic][1])
+
+---
+
+# 九、第三层：Regression Tests
+
+以后生产环境发现：
+
+```text
+Agent 某次分析错了
+```
+
+不要只修 Prompt。
+
+直接：
+
+```text
+Production Failure
+       ↓
+Create Eval Case
+       ↓
+加入 regression/
+       ↓
+以后每次自动跑
+```
+
+这就是你的核心飞轮：
+
+```text
+生产失败
+   ↓
+Eval Case
+   ↓
+修 Agent
+   ↓
+Regression
+   ↓
+验证修复
+   ↓
+继续生产
+```
+
+Regression 的目标接近：
+
+```text
+100%
+```
+
+因为它测试的是：
+
+> **过去已经掌握的能力有没有退化。**
+
+Anthropic 也是把 capability eval 最终毕业成 regression suite，并持续运行。([Anthropic][1])
+
+---
+
+# 十、Hidden Test 暂时只留接口
+
+不要现在浪费精力做复杂 Hidden 系统。
+
+先把：
+
+```text
+cases/hidden/
+```
+
+留出来。
+
+以后真正要上线/交付的时候：
+
+```text
+开发人员:
+regression + capability
+
+发布评测:
+regression + capability + hidden
+```
+
+Hidden 的意义就是防止：
+
+```text
+Agent
+↓
+针对公开 Case 优化
+↓
+公开测试 100%
+↓
+真实场景仍然失败
+```
+
+---
+
+# 十一、第二阶段再加 LLM Judge
+
+等 Deterministic Grader 跑稳之后再加：
+
+```text
+LLM Judge
+```
+
+只负责：
+
+```text
+Causal Reasoning
+Evidence Sufficiency
+Reasoning Quality
+Uncertainty
+Report Quality
+```
+
+不要让它重新判断：
+
+```text
+metric 是不是 1250
+event 到底有没有
+root cause 是否命中明确枚举
+```
+
+这些交给代码。
+
+LLM Judge 最终应该输出：
+
+```json
+{
+  "reasoning": 0.82,
+  "evidence_quality": 0.91,
+  "uncertainty": 0.75,
+  "report_quality": 0.88
+}
+```
+
+而且后面一定做：
+
+```text
+LLM Judge
+    ↕
+Human Calibration
+```
+
+因为模型评分本身也需要验证；Anthropic 明确强调 LLM Judge 必须持续与人工判断校准。([Anthropic][1])
+
+---
+
+# 十二、评分最终就采用这一套
+
+第一版：
+
+```text
+Diagnosis          35%
+Evidence           25%
+Metrics            15%
+Reasoning          10%
+Uncertainty         5%
+Report              5%
+Efficiency          5%
+```
+
+但是系统内部**不要只保存一个 Final Score**。
+
+保存：
+
+```text
+overall
+diagnosis
+evidence
+metrics
+reasoning
+uncertainty
+report
+efficiency
+```
+
+这样才能知道：
+
+```text
+总体提升
+≠
+根因识别提升
+```
+
+---
+
+# 十三、不要把 Tool Sequence 当核心指标
+
+记录：
+
+```text
+tool calls
+```
+
+但不要要求：
+
+```text
+必须：
+A → B → C → D
+```
+
+因为一个优秀 Agent 可能：
+
+```text
+A → C → D
+```
+
+一样能找到正确答案。
+
+成熟 Agent Eval 更应该评估 **outcome + evidence + quality**，而不是死卡执行路径。Anthropic 对此明确提出不要过度规定工具调用顺序。([Anthropic][1])
+
+Tool Call 更适合用于：
+
+```text
+效率分析
+异常诊断
+工具使用错误
+Agent 行为研究
+```
+
+---
+
+# 十四、多 Trial 放在第二阶段
+
+先支持：
+
+```bash
+diting-agent eval run --case cold_start_001
+```
+
+再支持：
+
+```bash
+diting-agent eval run \
+  --case cold_start_001 \
+  --trials 5
+```
+
+因为 Agent 有随机性，正式评测需要多个 trial 才更可靠。([Anthropic][1])
+
+但注意：
+
+> **Harness 第一版就要把 Trial 当一级对象设计，只是 CLI 默认跑 1 次。**
+
+这样以后加多 Trial 不需要重构。
+
+---
+
+# 十五、CLI 最终定这 4 个就够
+
+```bash
+diting-agent eval run --case cold_start_001
+
+diting-agent eval run --suite regression
+
+diting-agent eval report RUN_ID
+
+diting-agent eval compare RUN_A RUN_B
+```
+
+第一阶段不要：
+
+```text
+eval mutate
+eval optimize
+eval auto-generate
+eval promote
+```
+
+这些以后再说。
+
+---
+
+# 十六、第一阶段的验收标准
+
+你的第一版 Eval Framework 只有满足下面条件，才算完成：
+
+```text
+✅ 能加载 Case
+✅ 能加载 Gold
+✅ 能调用现有 Qoder Agent
+✅ Agent 和线上运行入口一致
+✅ 每个 Trial 独立
+✅ transcript 完整保存
+✅ tool call 完整保存
+✅ agent-result 保存
+✅ timeout/error 可以记录
+✅ Deterministic Grader 可评分
+✅ 支持 Partial Credit
+✅ 能输出 Case Score
+✅ 能输出 Suite Score
+✅ 能保存完整 Eval Run
+✅ 能重复运行得到同一套评分逻辑
+```
+
+然后拿：
+
+```text
+10 个 Framework Cases
++
+10 个真实 Trace
+```
+
+跑通。
+
+**到这一步，不需要 LLM Judge，不需要 Mutation，不需要 Dashboard。**
+
+---
+
+# 十七、之后完整演进路线就固定为
+
+```text
+V1
+Case
+ ↓
+Gold
+ ↓
+Harness
+ ↓
+Trial
+ ↓
+Artifact
+ ↓
+Deterministic Grader
+ ↓
+Eval Report
+
+        ↓
+
+V2
+Regression
+Capability
+Hidden
+Multi-Trial
+Compare
+
+        ↓
+
+V3
+LLM Judge
+Human Calibration
+
+        ↓
+
+V4
+Trace Mutation
+Hard Cases
+Adversarial Cases
+
+        ↓
+
+V5
+Production Failure
+       ↓
+Automatic Eval Case
+       ↓
+Regression
+       ↓
+持续 Agent Improvement
+```
+
+---
+
+# 最终我帮你把边界彻底敲死
+
+### **现在立刻做**
+
+```text
+Case Schema
+Gold Schema
+Agent Output Schema
+Trial Schema
+Eval Harness
+Isolation
+Artifact Capture
+Deterministic Grader
+Eval Report
+```
+
+### **现在真正准备的 Case**
+
+```text
+10 个 Framework Test
++
+10～20 个真实 Trace
+```
+
+### **现在暂时不做**
+
+```text
+LLM Judge
+Trace Mutation
+多 Agent Judge
+自动出题
+复杂 Dashboard
+Prompt Optimization
+RL
+```
+
+### **之后再做**
+
+```text
+LLM Judge
+→ Multi-Trial
+→ Capability/Regression/Hidden
+→ Mutation/Hard Case
+→ Production Failure 自动入集
+```
+
+这套方案的核心思想就是：
+
+> **先把“评测基础设施”做可靠，再把“Agent 能力评测”做丰富。**
+
+这样你现在正在建设的 Runtime、`QoderTransport`、ToolRegistry、Memory、Latency Control 都不会被 Eval 绑死；Eval 只是通过稳定的 Production Agent 入口观察它们的整体行为。这也符合当前成熟 Agent Eval 的方向：**评估的是 Agent + Harness + Tools + Environment + Outcome 的整体系统，而不是单纯 LLM 最后一段回答。** ([Anthropic][1])
+
+**所以你下一步最具体的开发任务，就是：先建立 `src/trace_agent/eval/`，把上述 6 个 Contract 和一个 `cold_start_001` 最小 Case 跑通。**
+
+[1]: https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents?utm_source=chatgpt.com "Demystifying evals for AI agents \ Anthropic"
+[2]: https://openai.com/index/introducing-agentkit/?cmid=34b34591-5868-43e7-8016-bbb6fbea4bf1&utm_source=chatgpt.com "Introducing AgentKit | OpenAI"

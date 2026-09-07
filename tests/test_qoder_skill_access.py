@@ -7,6 +7,7 @@ import pytest
 
 from trace_agent.agent.qoder import QoderAgentSdkAgent
 from trace_agent.config import LlmRuntimeConfig
+from trace_agent.llm.deepseek import DeepSeekByokPolicy
 from trace_agent.models import LlmProvider, ScenarioType, TraceCapability
 from trace_agent.skills import ScenarioSkillRouter, SkillCatalog
 
@@ -98,8 +99,11 @@ def test_runtime_config_builds_deepseek_byok_model_policy() -> None:
         model="deepseek-v4-pro-pg",
         base_url="https://api.deepseek.com/anthropic",
         api_key="secret",
-        sdk_environment={"QODER_PERSONAL_ACCESS_TOKEN": "secret"},
-        use_qoder_personal_access_token=True,
+        model_policy=DeepSeekByokPolicy(
+            provider=LlmProvider.DEEPSEEK,
+            model="deepseek-v4-pro-pg",
+            api_key="secret",
+        ),
     )
     agent = QoderAgentSdkAgent(
         skills=ScenarioSkillRouter(SkillCatalog.project_default()).select(

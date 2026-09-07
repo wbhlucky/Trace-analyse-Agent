@@ -485,3 +485,132 @@ pre.json {
   padding: 2px 8px;
   white-space: nowrap;
 }
+
+/* --- Preflight / environment self-check --- */
+.preflight {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  text-align: left;
+}
+.modal-preflight {
+  margin: 0 0 16px;
+}
+.preflight-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.preflight-summary {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+.preflight-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.preflight-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+}
+.preflight-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--faint);
+}
+.preflight-item.ok .preflight-dot { background: var(--green); }
+.preflight-item.warn .preflight-dot { background: var(--amber); }
+.preflight-item.error .preflight-dot { background: var(--red); }
+.preflight-copy { min-width: 0; flex: 1 1 auto; }
+.preflight-label { font-weight: 650; color: var(--ink-strong); font-size: 13px; }
+.preflight-detail { font-size: 12px; color: var(--muted); }
+.preflight-action { margin-top: 4px; font-size: 12px; color: var(--blue); }
+
+/* --- Inline field validation --- */
+.field-hint {
+  min-height: 14px;
+  font-size: 11px;
+  color: var(--red);
+}
+.field input.invalid, .field select.invalid {
+  border-color: var(--red);
+  background: var(--red-soft);
+}
+
+/* --- Activity timeline --- */
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+.timeline-item {
+  display: flex;
+  gap: 12px;
+  padding-bottom: 14px;
+  position: relative;
+}
+.timeline-item:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 16px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--line);
+}
+.timeline-marker {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--faint);
+  border: 2px solid var(--bg-2);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.timeline-item.done .timeline-marker { background: var(--green); }
+.timeline-item.running .timeline-marker { background: var(--blue); }
+.timeline-item.failed .timeline-marker { background: var(--red); }
+.timeline-copy { min-width: 0; flex: 1 1 auto; }
+.timeline-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.timeline-step { font-weight: 650; color: var(--ink-strong); }
+.timeline-duration { font-family: var(--mono); font-size: 12px; color: var(--cyan); }
+.timeline-error { margin-top: 4px; font-size: 12px; color: var(--red); }
+
+/* --- Clickable evidence chips and flash --- */
+.chip.link {
+  cursor: pointer;
+  transition: color .12s ease, border-color .12s ease;
+}
+.chip.link:hover { color: var(--blue); border-color: var(--blue); }
+.evidence-card.flash {
+  animation: evidence-flash 1.6s ease;
+}
+@keyframes evidence-flash {
+  0%, 60% { box-shadow: 0 0 0 2px var(--blue); }
+  100% { box-shadow: none; }
+}

@@ -1,0 +1,47 @@
+﻿{
+  "grader_version": 2,
+  "deterministic_weights": {
+    "root_cause": 0.4,
+    "evidence": 0.25,
+    "metrics": 0.25,
+    "boundary": 0.1
+  },
+  "pass_threshold": 0.8,
+  "partial_pass_range": [0.6, 0.8],
+  "hard_gates": {
+    "root_cause": 0.5,
+    "evidence": 0.5,
+    "metrics": 0.5
+  },
+  "failure_categories": [
+    "WRONG_ROOT_CAUSE",
+    "EVIDENCE_ERROR",
+    "MISSING_EVIDENCE",
+    "METRIC_ERROR",
+    "UNVERIFIED_METRIC",
+    "BOUNDARY_ERROR",
+    "TIMEOUT",
+    "TOOL_ERROR",
+    "TRAJECTORY_ERROR"
+  ],
+  "trajectory": {
+    "required_tools": [
+      "get_trace_overview",
+      "inspect_cold_start_candidates",
+      "inspect_cold_start_timeline"
+    ],
+    "forbidden_tools": [],
+    "max_tool_errors": 2,
+    "max_turns": 20
+  },
+  "llm_rubric": {
+    "score_min": 1,
+    "score_max": 5,
+    "normalize": true,
+    "dimensions": {
+      "reasoning": { "weight": 0.4 },
+      "evidence_grounding": { "weight": 0.35 },
+      "report_quality": { "weight": 0.25 }
+    }
+  }
+}

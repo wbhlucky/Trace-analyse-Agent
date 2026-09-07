@@ -19,6 +19,7 @@ class StrictModel(BaseModel):
 class AgentKind(StrEnum):
     LOCAL = "local"
     QODER = "qoder"
+    CLAUDE = "claude"
 
 
 class LlmProvider(StrEnum):

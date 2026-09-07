@@ -1,0 +1,89 @@
+样例：Case（题目本身）
+
+Case 是题面本身，Gold Oracle 属于 Case，不属于 Trial。
+一个 Case 默认跑 3 个 Trial（见 trials/ 目录）。
+
+id: cold-start-001
+suite: regression
+difficulty: medium
+
+# ----------------------------------------------------------------------------
+# 1) Prompt：Agent 要解决的问题
+# ----------------------------------------------------------------------------
+prompt: |
+  微信冷启动耗时明显增加，请分析主要瓶颈、根因和证据，
+  并给出可验证的指标与优化建议。
+
+# ----------------------------------------------------------------------------
+# 2) 题目环境：Agent 能用的输入与工具
+# ----------------------------------------------------------------------------
+input:
+  trace: evals\examples\cold-start-demo\fixtures\hiprofiler_data_new.htrace"
+  trace_kind: sqlite
+  scenario_type: cold-start
+  scenario: 微信应用冷启动过慢
+  symptom: 点开后响应半天才完全启动
+
+environment:
+  timeout_seconds: 600            
+  tools:
+    - get_trace_overview
+    - query_trace_sql
+    - inspect_cold_start_candidates
+    - inspect_cold_start_timeline
+    - inspect_thread_execution
+
+# ----------------------------------------------------------------------------
+# 3) Gold Oracle：Case 级结构化真值（每个 Trial 都对着它打分）
+# ----------------------------------------------------------------------------
+gold:
+  version: 1
+
+  bottleneck:
+    category: SYNC_MODULE_EVALUATION_ON_MAIN_THREAD
+    stage: launch_ability
+
+  root_cause:
+    category: SYNC_MODULE_EVALUATION_ON_MAIN_THREAD
+    id: RC001
+    # 同一 root cause 可表达多个等价的组件名
+    acceptable_components:
+      - EntryAbility.abc
+      - WXAbilityStage.abc
+
+  evidence:
+    - type: slice
+      name: LaunchAbility
+      thread: main
+      relation: supports_root_cause
+    - type: slice
+      name: ExecuteModuleBufferSecure
+      thread: main
+      relation: supports_root_cause
+    - type: slice
+      name: APP_COMPONENT_LOAD
+      thread: main
+      relation: supports_bottleneck   # 对应「完全启动」体感慢
+
+  metrics:
+    startup_duration_ms:
+      value: 1533.675
+      tolerance_ms: 20
+    presentation_duration_ms:
+      value: 1549.428
+      tolerance_ms: 20
+
+  severity: high
+
+  uncertainty:
+    status: observed          # 不用 confirmed；关键结论最高只是 observed
+    notes:
+      - 无 app_startup 阶段标记，边界由 callstack 生命周期切片重建
+      - 无用户点击 Marker，起点为 AppSpawn 孵化 Hook
+      - APP_COMPONENT_LOAD 后的「完全启动」边界是结构近似,suspected
+      - 进程 start_ts 为空,冷启动判定依赖生命周期切片而非 app_startup 行
+
+  forbidden_conclusions:
+    - Flutter raster 执行是主要瓶颈
+    - 主线程等待 binder 是主要根因
+    - 主线程长时间 Sleep/IO 等待是冷启动慢的根因   # 实测是 cpu-bound,不是等待
