@@ -1,0 +1,4 @@
+interface:
+  display_name: "Response Latency Analysis"
+  short_description: "Analyze input-to-first-response latency"
+  default_prompt: "Use $response-latency-analysis to analyze input-to-first-feedback latency."

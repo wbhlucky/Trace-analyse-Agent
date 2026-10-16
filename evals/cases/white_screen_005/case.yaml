@@ -1,0 +1,67 @@
+﻿# 人工标注问题区间（相对 trace 起点 t0 的约值，精确 ns 待回填）：
+#   转场事件 ABILITY_OR_PAGE_SWITCH 结束后约 4.25s 开始
+#   约 4.85s 白屏结束，持续约 600ms
+id: white_screen_005
+
+input:
+  trace: "D:\\Users\\Administrator\\Desktop\\trace\\白屏分析\\mtzb_yqyj_white_screen.htrace"
+  type: frame-jank
+  scenario: 美团众包点击邀请有奖白屏
+  symptom: 点击邀请有奖后页面长时间白屏，布局与渲染延迟
+  time_range: "1486795715818724ns-1486796315818724ns"
+  problem_duration_ms: 600
+  operation_marker: ABILITY_OR_PAGE_SWITCH
+
+metadata:
+  suite: white-screen
+  difficulty: hard
+  tags:
+    - frame-jank
+    - white-screen
+    - meituan-zhongbao
+    - react-native
+    - shadownode
+
+gold:
+  root_causes:
+    - id: RC001
+      canonical: react_native_page_and_component_creation_overhead
+      aliases:
+        - RN_OH_JS
+        - React Native
+        - 页面创建
+        - 组件创建与更新
+        - 框架开销较大
+    - id: RC002
+      canonical: turbomodule_async_call_cost
+      aliases:
+        - TurboModule
+        - TurboModule 异步调用
+        - 异步调用链路
+    - id: RC003
+      canonical: shadownode_create_clone_overhead
+      aliases:
+        - ShadowNode 创建
+        - ShadowNode 克隆
+  bottlenecks:
+    - canonical: rn_layout_event_dispatch
+      aliases:
+        - Load/Layout 事件分发
+        - 布局阶段
+        - 框架开销
+    - canonical: shadownode_lifecycle
+      aliases:
+        - ShadowNode 创建
+        - ShadowNode 克隆
+  evidence:
+    - type: symbol
+      name: RN_OH_JS
+      relation: supports_root_cause
+    - type: symbol
+      name: TurboModule
+      relation: supports_root_cause
+    - type: symbol
+      name: ShadowNode
+      relation: supports_root_cause
+
+  severity: high

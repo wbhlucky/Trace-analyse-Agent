@@ -1,0 +1,66 @@
+﻿# 人工标注问题区间（相对 trace 起点 t0 的约值，精确 ns 待回填）：
+#   约 3.47s 开始，白屏持续约 400ms，约 3.87s 结束
+id: white_screen_006
+
+input:
+  trace: "D:\\Users\\Administrator\\Desktop\\trace\\白屏分析\\gaodemap_white_screen.htrace"
+  type: frame-jank
+  scenario: 高德地图点击实时公交白屏
+  symptom: 点击实时公交后长时间白屏，主线程 UI 渲染被阻塞
+  time_range: "1486964572883802ns-1486964972883802ns"
+  problem_duration_ms: 400
+
+metadata:
+  suite: white-screen
+  difficulty: hard
+  tags:
+    - frame-jank
+    - white-screen
+    - amap
+    - text-layout
+    - thread-blocking
+
+gold:
+  root_causes:
+    - id: RC001
+      canonical: js_thread_blocks_main_thread
+      aliases:
+        - JavaScriptThread 线程运行致使主线程阻塞
+        - JavaScriptThread 运行过久
+        - 主线程长时间等待
+        - JS 任务阻塞主线程
+    - id: RC002
+      canonical: repeated_text_paragraph_recreation
+      aliases:
+        - TextLayoutAlgorithm::MeasureContent
+        - 文本测量任务
+        - needReCreateParagraph
+        - 重新创建文本段落
+        - 文本排版测量开销
+    - id: RC003
+      canonical: main_thread_ui_render_blocked
+      aliases:
+        - 高德主线程 UI 渲染过久
+        - 页面文本测量开销较大
+  bottlenecks:
+    - canonical: js_thread_long_running
+      aliases:
+        - JavaScriptThread
+        - JS 线程运行过久
+    - canonical: text_measurement_overhead
+      aliases:
+        - MeasureContent
+        - 文本测量
+        - needReCreateParagraph
+  evidence:
+    - type: symbol
+      name: JavaScriptThread
+      relation: supports_root_cause
+    - type: symbol
+      name: TextLayoutAlgorithm::MeasureContent
+      relation: supports_root_cause
+    - type: symbol
+      name: needReCreateParagraph
+      relation: supports_root_cause
+
+  severity: high

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Protocol
+from collections.abc import Mapping, Sequence
+from typing import Any, Protocol
 
 from trace_agent.agent.local import LocalAnalysisAgent
 from trace_agent.agent.protocols import AgentSelection, AnalysisAgent, ProviderMetadata
@@ -23,6 +24,7 @@ class AnalysisAgentFactory(Protocol):
         trace: TraceHandle,
         *,
         memory_context: str | None = None,
+        memory_hits: Sequence[Mapping[str, Any]] | None = None,
     ) -> AgentSelection:
         """Create an agent after Trace capabilities are known."""
 
@@ -42,6 +44,7 @@ class DefaultAnalysisAgentFactory:
         trace: TraceHandle,
         *,
         memory_context: str | None = None,
+        memory_hits: Sequence[Mapping[str, Any]] | None = None,
     ) -> AgentSelection:
         if request.agent is AgentKind.LOCAL:
             return AgentSelection(
@@ -60,6 +63,7 @@ class DefaultAnalysisAgentFactory:
             skills=skills,
             runtime_config=self._llm_config,
             memory_context=memory_context,
+            memory_hits=memory_hits,
         )
         return AgentSelection(
             agent=agent,

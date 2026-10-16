@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from trace_agent.agent.core import agent_tool_payload, bounded_error
+from trace_agent.agent.core.audit import SkillAccessAudit
 from trace_agent.models import AgentAnalysisDraft, AnalyzeRequest
 from trace_agent.policies import (
     EvidenceSubmissionPolicy,
@@ -130,20 +131,33 @@ def submission_rejection(
 def create_read_hook(
     project_root: Path,
     skills: list[SkillDefinition],
+    audit: SkillAccessAudit | None = None,
 ) -> Any:
     async def validate_read(
         hook_input: dict[str, Any],
         tool_use_id: str | None,
         context: dict[str, Any],
     ) -> dict[str, Any]:
-        del tool_use_id, context
+        del context
         tool_input = hook_input.get("tool_input")
         raw_path = (
             tool_input.get("file_path")
             if isinstance(tool_input, dict)
             else None
         )
-        allowed = is_allowed_skill_file(project_root, skills, raw_path)
+        allowed, resolved, reason = evaluate_skill_file(
+            project_root, skills, raw_path
+        )
+        if audit is not None:
+            audit.record(
+                tool="Read",
+                decision="allow" if allowed else "deny",
+                requested_path=raw_path if isinstance(raw_path, str) else None,
+                resolved_path=resolved,
+                skill=matched_skill_name(skills, resolved),
+                reason=None if allowed else reason,
+                tool_use_id=tool_use_id,
+            )
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -151,7 +165,7 @@ def create_read_hook(
                 "permissionDecisionReason": (
                     "\u5141\u8bb8\u8bfb\u53d6\u672c\u6b21\u542f\u7528\u7684 Skill \u6587\u4ef6"
                     if allowed
-                    else "Read \u53ea\u80fd\u8bbf\u95ee\u672c\u6b21\u542f\u7528\u7684 Skill \u76ee\u5f55"
+                    else _read_deny_reason(reason)
                 ),
             }
         }
@@ -159,13 +173,93 @@ def create_read_hook(
     return validate_read
 
 
+def _read_deny_reason(reason: str) -> str:
+    if reason == "missing":
+        return (
+            "\u8be5\u8def\u5f84\u4e0d\u5b58\u5728\u3002Skill \u7684 references/ "
+            "\u8d44\u6599\u4f4d\u4e8e\u58f0\u660e\u5b83\u7684 Skill \u76ee\u5f55\u4e0b\uff0c"
+            "\u8bf7\u6539\u7528\u6b63\u786e\u5f52\u5c5e\u7684 Skill \u8def\u5f84\u540e\u91cd\u8bd5\u3002"
+        )
+    if reason == "empty_path":
+        return "Read \u7f3a\u5c11 file_path \u53c2\u6570\u3002"
+    return "Read \u53ea\u80fd\u8bbf\u95ee\u672c\u6b21\u542f\u7528\u7684 Skill \u76ee\u5f55\u3002"
+
+
+def create_skill_hook(
+    skills: list[SkillDefinition],
+    audit: SkillAccessAudit | None = None,
+) -> Any:
+    """Gate and audit ``Skill`` invocations.
+
+    ``skills=`` is a context filter, not a sandbox: the CLI still exposes every
+    discovered skill to the ``Skill`` tool. This hook keeps the runtime surface
+    equal to the selected methodology by denying any skill the router did not
+    pick, and records each load so progressive disclosure is measurable.
+    """
+    enabled = {skill.name for skill in skills}
+
+    async def validate_skill(
+        hook_input: dict[str, Any],
+        tool_use_id: str | None,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        del context
+        tool_input = hook_input.get("tool_input")
+        requested = (
+            tool_input.get("skill")
+            if isinstance(tool_input, dict)
+            else None
+        )
+        allowed = is_enabled_skill(enabled, requested)
+        if audit is not None:
+            audit.record(
+                tool="Skill",
+                decision="allow" if allowed else "deny",
+                skill=requested if isinstance(requested, str) else None,
+                tool_use_id=tool_use_id,
+            )
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow" if allowed else "deny",
+                "permissionDecisionReason": (
+                    "\u5141\u8bb8\u52a0\u8f7d\u672c\u6b21\u542f\u7528\u7684 Skill"
+                    if allowed
+                    else "Skill \u53ea\u80fd\u52a0\u8f7d\u672c\u6b21\u573a\u666f\u9009\u4e2d\u7684 Skill"
+                ),
+            }
+        }
+
+    return validate_skill
+
+
+def is_enabled_skill(enabled: set[str], raw_name: Any) -> bool:
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        return False
+    candidate = raw_name.strip()
+    if candidate in enabled:
+        return True
+    # Plugin discovery namespaces skills as "<plugin>:<name>".
+    return candidate.rsplit(":", 1)[-1] in enabled
+
+
 def is_allowed_skill_file(
     project_root: Path,
     skills: list[SkillDefinition],
     raw_path: Any,
 ) -> bool:
+    allowed, _, _ = evaluate_skill_file(project_root, skills, raw_path)
+    return allowed
+
+
+def evaluate_skill_file(
+    project_root: Path,
+    skills: list[SkillDefinition],
+    raw_path: Any,
+) -> tuple[bool, str | None, str]:
+    """Classify a Read target so the denial tells the model how to recover."""
     if not isinstance(raw_path, str) or not raw_path.strip():
-        return False
+        return False, None, "empty_path"
 
     requested = Path(raw_path)
     if not requested.is_absolute():
@@ -173,9 +267,25 @@ def is_allowed_skill_file(
     try:
         resolved = requested.resolve(strict=True)
     except OSError:
-        return False
+        return False, str(requested), "missing"
 
-    return resolved.is_file() and any(
+    if not resolved.is_file():
+        return False, str(resolved), "missing"
+    allowed = any(
         resolved.is_relative_to(skill.directory.resolve())
         for skill in skills
     )
+    return allowed, str(resolved), "ok" if allowed else "outside_enabled_skills"
+
+
+def matched_skill_name(
+    skills: list[SkillDefinition],
+    resolved_path: str | None,
+) -> str | None:
+    if not resolved_path:
+        return None
+    path = Path(resolved_path)
+    for skill in skills:
+        if path.is_relative_to(skill.directory.resolve()):
+            return skill.name
+    return None

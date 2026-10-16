@@ -6,7 +6,61 @@ import json
 from typing import Any
 
 from trace_agent.models import AgentAnalysisDraft, AnalyzeRequest
+from trace_agent.memory.flags import memory_prompt_chars
 from trace_agent.skills import SkillDefinition
+
+
+# Recalled memory is a prior, not evidence. It is capped so a large recall
+# batch cannot crowd out the methodology rules above it.
+_MEMORY_PREAMBLE = (
+    "以下是按场景与症状召回的历史分析记忆，只能作为先验假设与排查顺序"
+    "参考；它与本次 Trace 的工具取证结果冲突时，一律以取证结果为准，"
+    "不得把记忆内容当作本次 Trace 的事实写入 Draft："
+)
+
+
+def memory_section(memory_context: str | None) -> str:
+    """Render recalled memory as a bounded system-prompt section.
+
+    Recall returns whole knowledge items (``- [Procedure] ...``). Truncating
+    mid-item would hand the model a half-stated prior, so the budget is filled
+    item by item and the remainder is marked as elided.
+
+    The budget is :func:`~trace_agent.memory.flags.memory_prompt_chars`, the
+    same number ``memory.context.composer`` sizes its three trust partitions
+    against. Reading it from one place is what keeps the composer and this
+    function from disagreeing: if they each had their own default, a section
+    composed to fit could still be truncated here, silently dropping the
+    partition that was rendered last.
+
+    Truncation stays as a safety net rather than the primary mechanism - the
+    composer already fits the budget - because callers other than recall can
+    hand this function arbitrary text.
+    """
+    if not memory_context:
+        return ""
+    text = memory_context.strip()
+    if not text:
+        return ""
+    limit = memory_prompt_chars()
+    return _MEMORY_PREAMBLE + _truncate_items(text, limit)
+
+
+def _truncate_items(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    head, separator, rest = text.partition("\n- ")
+    if not separator:
+        return text[:limit].rstrip() + "…"
+    kept = head
+    for item in ("\n- " + rest).split("\n- ")[1:]:
+        candidate = kept + "\n- " + item
+        if len(candidate) > limit:
+            break
+        kept = candidate
+    if kept == head:
+        return head[:limit].rstrip() + "…"
+    return kept + "\n- （其余召回项因长度预算被省略）"
 
 
 def system_prompt(
@@ -95,6 +149,7 @@ def system_prompt(
         "已有 Evidence 提交最终结果。"
         "在得到可靠边界、主导阶段、关键线程状态和根因证据后立即形成最终结果，"
         "不要为了填满可选字段继续扩展取证。缺少精确分阶段数据时留空并写入 limitations。"
+        + memory_section(memory_context)
         + final_instruction
     )
 

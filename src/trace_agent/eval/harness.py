@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from trace_agent.eval.grader import DeterministicGrader
 from trace_agent.eval.loader import iter_cases
+from trace_agent.eval.memory_audit import MemoryProbe, record_trial_memory
 from trace_agent.eval.models import (
     Case,
     EvalRun,
@@ -31,6 +32,13 @@ class EvalHarness:
     the trajectory layer deterministically and keeps it separate from outcome
     correctness.  Trajectory quality never contributes to ``case_scores`` or
     ``suite_scores`` and never enters the outcome hard gates.
+
+    Memory is optional and off by default. When a :class:`MemoryProbe` is
+    supplied, each trial's injection is audited for self-contamination and its
+    grade is fed back to the episode that trial produced, which is the evidence
+    the memory gate's ``active -> verified`` path reads. The probe is injected
+    rather than constructed here so the harness stays usable - and memory-free -
+    in tests and in a plain ``eval run``.
     """
 
     def __init__(
@@ -46,6 +54,7 @@ class EvalHarness:
         timeout_seconds: float = 3600.0,
         trials: int = 1,
         agent: AgentKind = AgentKind.LOCAL,
+        memory_probe: MemoryProbe | None = None,
     ) -> None:
         self._application_factory = application_factory
         self._output_root = (
@@ -65,6 +74,7 @@ class EvalHarness:
         self._trajectory_grader = trajectory_grader or TrajectoryGrader(
             trajectory_config
         )
+        self._memory_probe = memory_probe
 
     async def run(
         self,
@@ -93,6 +103,14 @@ class EvalHarness:
 
                 if trial.output is None:
                     values.append(0.0)
+                    # Ungraded, but still audited: an errored trial may have been
+                    # shown another trial's memory before it died, and dropping it
+                    # here would understate the section 8.4 contamination rate.
+                    record_trial_memory(
+                        self._memory_probe,
+                        trial.memory,
+                        graded_pass=None,
+                    )
                     trial_results.append(
                         TrialResult(
                             case_id=case.id,
@@ -101,6 +119,7 @@ class EvalHarness:
                             status=trial.status,
                             failure=trial.failure,
                             error=trial.error,
+                            memory=trial.memory,
                         )
                     )
                     continue
@@ -135,6 +154,14 @@ class EvalHarness:
                     latency_ms=trial.elapsed_ms,
                 )
                 values.append(grade.overall)
+                # Graded, so the grade becomes evidence: audit what this trial
+                # was shown before the grade can move any trust level.
+                record_trial_memory(
+                    self._memory_probe,
+                    trial.memory,
+                    graded_pass=outcome.passed,
+                    graded_score=grade.overall,
+                )
                 trial_results.append(
                     TrialResult(
                         case_id=case.id,
@@ -146,6 +173,7 @@ class EvalHarness:
                         trajectory=trajectory,
                         operational=operational,
                         error=trial.error,
+                        memory=trial.memory,
                     )
                 )
 
@@ -224,6 +252,7 @@ class EvalHarness:
         gate_thresholds: GateThresholds | None = None,
         timeout_seconds: float = 3600.0,
         agent: AgentKind = AgentKind.LOCAL,
+        memory_probe: MemoryProbe | None = None,
     ) -> EvalRun:
         cases = iter_cases(root, suite=suite)
         if case_id is not None:
@@ -235,6 +264,7 @@ class EvalHarness:
             timeout_seconds=timeout_seconds,
             trials=trials,
             agent=agent,
+            memory_probe=memory_probe,
         )
         return await harness.run(cases)
 

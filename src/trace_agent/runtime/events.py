@@ -26,6 +26,18 @@ class EventType(StrEnum):
     RUN_FAILED = "run.failed"
     RUN_COMPLETED = "run.completed"
 
+    # Memory observability (design doc section 9). Before these existed the
+    # only trace of recall was a character count in the skill-access audit, so
+    # "did a wrong prior cause this conclusion" was unanswerable after the fact.
+    # Each event names one stage of the loop: what was asked for, what was
+    # found, what reached the prompt, what was written back, and what moved.
+    MEMORY_RECALLED = "memory.recalled"
+    MEMORY_INJECTED = "memory.injected"
+    MEMORY_EPISODE = "memory.episode"
+    MEMORY_CONSOLIDATED = "memory.consolidated"
+    MEMORY_TRUST = "memory.trust"
+    MEMORY_MAINTENANCE = "memory.maintenance"
+
 
 @dataclass(frozen=True, slots=True)
 class AgentEvent:

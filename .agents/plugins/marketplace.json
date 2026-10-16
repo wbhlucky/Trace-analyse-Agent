@@ -1,0 +1,20 @@
+{
+  "name": "diting-agent-local",
+  "interface": {
+    "displayName": "Diting Agent Local"
+  },
+  "plugins": [
+    {
+      "name": "diting-agent",
+      "source": {
+        "source": "local",
+        "path": "./plugins/diting-agent"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

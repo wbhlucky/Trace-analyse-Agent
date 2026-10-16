@@ -1,0 +1,62 @@
+﻿# 人工标注问题区间（相对 trace 起点 t0 的约值，精确 ns 待回填）：
+#   转场事件 ABILITY_OR_PAGE_SWITCH 结束后约 8.23s 开始
+#   约 8.60s 白屏结束，持续约 370ms
+id: white_screen_002
+
+input:
+  trace: "D:\\Users\\Administrator\\Desktop\\trace\\白屏分析\\zfb_white_screen.htrace"
+  type: frame-jank
+  scenario: 支付宝首页点击卡包白屏
+  symptom: 点击卡包后页面转场期间长时间白屏，首屏内容未及时渲染
+  time_range: "1485991621405826ns-1485991991405826ns"
+  problem_duration_ms: 370
+  operation_marker: ABILITY_OR_PAGE_SWITCH
+
+metadata:
+  suite: white-screen
+  difficulty: hard
+  tags:
+    - frame-jank
+    - white-screen
+    - alipay
+    - cube
+    - layout-blocking
+
+gold:
+  root_causes:
+    - id: RC001
+      canonical: main_thread_layout_and_component_update_overload
+      aliases:
+        - 页面转场期间组件更新较重
+        - 布局处理任务较重
+        - 主线程承担较多组件构建
+        - 布局测量
+        - 页面更新工作
+        - 组件构建
+    - id: RC002
+      canonical: cube_layout_and_js_execution_on_critical_path
+      aliases:
+        - Cube 布局
+        - JS 逻辑执行
+        - Cube 布局引擎
+        - 渲染时序
+  bottlenecks:
+    - canonical: main_thread_component_construction
+      aliases:
+        - 组件构建
+        - 主线程集中处理
+        - 布局测量与页面更新
+    - canonical: cube_layout_render_timing
+      aliases:
+        - Cube 布局
+        - 渲染时序
+        - 首帧渲染关键路径
+  evidence:
+    - type: symbol
+      name: Cube
+      relation: supports_root_cause
+    - type: symbol
+      name: 布局测量
+      relation: supports_bottleneck
+
+  severity: high

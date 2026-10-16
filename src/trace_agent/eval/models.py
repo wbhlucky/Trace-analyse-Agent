@@ -158,10 +158,30 @@ class Gold(StrictModel):
 
 
 class CaseInput(StrictModel):
+    """User-facing inputs that map to an :class:`AnalyzeRequest`.
+
+    ``trace`` and ``type`` are the case-file spellings for the production
+    request fields ``trace_path`` and ``scenario_type``.  Everything below
+    mirrors the corresponding CLI inputs so a case can be written exactly the
+    way a user would describe the analysis task.
+    """
+
     trace: Path
     type: ScenarioType
     scenario: str = Field(min_length=1)
     symptom: str = Field(min_length=1)
+    device: str | None = None
+    build: str | None = None
+    time_range: str | None = None
+    target_process: str | None = None
+    operation_marker: str | None = None
+    start_marker: str | None = None
+    end_marker: str | None = None
+    response_marker: str | None = None
+    completion_marker: str | None = None
+    problem_duration_ms: float | None = Field(default=None, gt=0, le=3_600_000)
+    refresh_rate_hz: float | None = Field(default=None, gt=0)
+    baseline_trace_path: Path | None = None
 
 
 class CaseMetadata(StrictModel):
@@ -193,6 +213,188 @@ class AgentOutput(StrictModel):
 
     result: AnalysisResult
     raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class TrialMemoryHit(StrictModel):
+    """One recalled memory as it reached a trial's prompt.
+
+    Mirrors :class:`trace_agent.memory.models.MemoryTraceHit` rather than reusing
+    it: the eval artifact must stay loadable from disk without the memory package
+    being importable, and ``eval-run.json`` is a report, not a live handle.
+    """
+
+    memory_id: str
+    trust: str = ""
+    kind: str = ""
+    score: float = Field(default=0.0, ge=0)
+    lexical: float = Field(default=0.0, ge=0, le=1)
+    semantic: float = Field(default=0.0, ge=0, le=1)
+    injected: bool = False
+
+
+class ContaminatedRecord(StrictModel):
+    """One injected record that was minted inside this very eval run."""
+
+    record_id: str
+    record_kind: str = "curated"
+    trust: str = ""
+    episode_id: str = ""
+    reason: str = ""
+
+
+class MemoryContamination(StrictModel):
+    """Self-contamination measurement for one trial (section 8.4).
+
+    ``contaminated`` counts the unverified records a trial was shown that came
+    from another trial of the same run - the number section 14 targets at zero.
+    ``trusted_from_same_run`` is reported separately because it is a *worse*
+    finding, not a milder one: it means the gate promoted something inside a
+    single experiment, so the trials were never independent to begin with.
+    """
+
+    eval_run_id: str = ""
+    injected: int = Field(default=0, ge=0)
+    contaminated: int = Field(default=0, ge=0)
+    trusted_from_same_run: int = Field(default=0, ge=0)
+    rate: float = Field(default=0.0, ge=0, le=1)
+    clean: bool = True
+    items: list[ContaminatedRecord] = Field(default_factory=list)
+    error: str = ""
+
+    @property
+    def same_run_total(self) -> int:
+        return self.contaminated + self.trusted_from_same_run
+
+
+class TrialMemory(StrictModel):
+    """Everything one trial's memory usage tells the report.
+
+    Built from the ``memory_trace`` the run wrote into ``run.json``, which is why
+    the fields are a projection of
+    :class:`trace_agent.memory.models.MemoryTrace` plus the two eval-only
+    additions: the grade this trial earned, and the contamination audit of what
+    it was shown. Without this, "did memory help or did memory leak" is
+    unanswerable from an eval artifact.
+    """
+
+    enabled: bool = True
+    query: str = ""
+    namespace: str = ""
+    store: str = ""
+    episode_id: str | None = None
+    context_chars: int = Field(default=0, ge=0)
+    budget_chars: int = Field(default=0, ge=0)
+    latency_ms: float = Field(default=0.0, ge=0)
+    injected_ids: list[str] = Field(default_factory=list)
+    trust_mix: dict[str, int] = Field(default_factory=dict)
+    hits: list[TrialMemoryHit] = Field(default_factory=list)
+    created: list[str] = Field(default_factory=list)
+    trust_changed: list[str] = Field(default_factory=list)
+    #: Trust transitions the post-grade gate review produced, kept as raw dicts
+    #: so the report can show ``candidate -> verified`` with its reason.
+    gate_transitions: list[dict[str, Any]] = Field(default_factory=list)
+    graded_pass: bool | None = None
+    graded_score: float | None = Field(default=None, ge=0, le=1)
+    contamination: MemoryContamination | None = None
+
+    @property
+    def injected_trust_mix(self) -> dict[str, int]:
+        """Trust distribution of what the model saw, not of what recall found."""
+        mix: dict[str, int] = {}
+        for hit in self.hits:
+            if not hit.injected:
+                continue
+            mix[hit.trust] = mix.get(hit.trust, 0) + 1
+        return mix
+
+    @classmethod
+    def from_trace(cls, trace: Any) -> TrialMemory | None:
+        """Project a ``run.json`` ``memory_trace`` payload, tolerating junk.
+
+        Defensive on purpose. The trace is written by a best-effort subsystem and
+        read back from a file that may predate a field or have been truncated by
+        a crashed run; an eval report that cannot load because one memory key was
+        malformed would lose every other measurement in the run with it.
+        """
+        if not isinstance(trace, dict):
+            return None
+        raw_hits = trace.get("hits")
+        hits: list[TrialMemoryHit] = []
+        if isinstance(raw_hits, list):
+            for item in raw_hits:
+                if not isinstance(item, dict) or not item.get("memory_id"):
+                    continue
+                hits.append(
+                    TrialMemoryHit(
+                        memory_id=str(item["memory_id"]),
+                        trust=str(item.get("trust") or ""),
+                        kind=str(item.get("kind") or ""),
+                        score=_as_float(item.get("score")),
+                        lexical=_as_unit_float(item.get("lexical")),
+                        semantic=_as_unit_float(item.get("semantic")),
+                        injected=bool(item.get("injected")),
+                    )
+                )
+        injected = [hit.memory_id for hit in hits if hit.injected]
+        raw_ids = trace.get("injected_ids")
+        if not injected and isinstance(raw_ids, list):
+            injected = [str(item) for item in raw_ids if item]
+        return cls(
+            enabled=bool(trace.get("enabled", True)),
+            query=str(trace.get("query") or ""),
+            namespace=str(trace.get("namespace") or ""),
+            store=str(trace.get("store") or ""),
+            episode_id=(
+                str(trace["episode_id"]) if trace.get("episode_id") else None
+            ),
+            context_chars=_as_int(trace.get("context_chars")),
+            budget_chars=_as_int(trace.get("budget_chars")),
+            latency_ms=_as_float(trace.get("latency_ms")),
+            injected_ids=injected,
+            trust_mix=_as_int_map(trace.get("trust_mix")),
+            hits=hits,
+            created=_as_str_list(trace.get("created")),
+            trust_changed=_as_str_list(trace.get("trust_changed")),
+        )
+
+
+def _as_float(value: Any) -> float:
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _as_unit_float(value: Any) -> float:
+    """Clamp a component score into the ``[0, 1]`` its field declares.
+
+    ``_as_float`` only floors at zero, and :class:`TrialMemoryHit` bounds
+    ``lexical``/``semantic`` at one. Without the ceiling a trace carrying an
+    out-of-range component would raise inside :meth:`TrialMemory.from_trace`,
+    which is the exact failure that method exists to prevent: the runner calls
+    it inside the trial's ``try`` block, so one malformed memory key would
+    reclassify an otherwise successful trial as an error.
+    """
+    return min(1.0, _as_float(value))
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _as_str_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item]
+
+
+def _as_int_map(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): _as_int(item) for key, item in value.items()}
 
 
 class TrialStatus(StrEnum):
@@ -245,6 +447,10 @@ class Trial(StrictModel):
     error: str | None = None
     started_at: datetime = Field(default_factory=utc_now)
     completed_at: datetime | None = None
+    #: Memory side of this trial, ``None`` when memory was off or the run wrote
+    #: no trace. Kept on the trial and not only on the aggregate so a single
+    #: contaminated trial stays identifiable.
+    memory: TrialMemory | None = None
 
 
 class ComponentScore(StrictModel):
@@ -405,6 +611,10 @@ class TrialResult(StrictModel):
     trajectory: TrajectoryResult | None = None
     operational: OperationalMetrics | None = None
     error: str | None = None
+    #: Same observation as ``Trial.memory``, carried onto the result so the
+    #: aggregate view and the report can reach it without walking back into the
+    #: raw trial list.
+    memory: TrialMemory | None = None
 
 
 class MultiTrialResult(StrictModel):

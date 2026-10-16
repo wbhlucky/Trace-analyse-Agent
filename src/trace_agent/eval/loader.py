@@ -40,6 +40,13 @@ def load_case(path: Path) -> Case:
             "trace": _resolve_trace_path(path, trace),
         }
 
+    baseline = input_part.get("baseline_trace_path")
+    if baseline is not None:
+        input_part = {
+            **input_part,
+            "baseline_trace_path": _resolve_trace_path(path, baseline),
+        }
+
     if "scenario_type" in input_part:
         input_part = {**input_part, "type": input_part["scenario_type"]}
         input_part.pop("scenario_type", None)

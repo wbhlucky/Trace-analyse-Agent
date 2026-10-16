@@ -8,6 +8,12 @@ const state = {
   runningJobs: [],
   jobEvents: {},
   preflight: null,
+  view: "case",
+  memory: null,
+  memoryTrust: "all",
+  memoryQuery: "",
+  memoryFlash: null,
+  memoryProbeOpen: false,
 };
 
 const els = {
@@ -38,6 +44,21 @@ const els = {
   panelRun: document.getElementById("panel-run"),
   panelJson: document.getElementById("panel-json"),
   emptyBody: document.querySelector("#empty-state"),
+  memoryOpen: document.getElementById("memory-open"),
+  memoryView: document.getElementById("memory-view"),
+  memoryCrumbs: document.getElementById("memory-crumbs"),
+  memorySubtitle: document.getElementById("memory-subtitle"),
+  memoryBody: document.getElementById("memory-body"),
+  memorySearch: document.getElementById("memory-search"),
+  memoryTrustFilter: document.getElementById("memory-trust-filter"),
+  memoryMaintain: document.getElementById("memory-maintain"),
+  memoryProbe: document.getElementById("memory-probe"),
+  memoryProbeToggle: document.getElementById("memory-probe-toggle"),
+  memoryProbeQuery: document.getElementById("memory-probe-query"),
+  memoryProbeScenario: document.getElementById("memory-probe-scenario"),
+  memoryProbeRun: document.getElementById("memory-probe-run"),
+  memoryProbeResult: document.getElementById("memory-probe-result"),
+  memoryBack: document.getElementById("memory-back"),
   preflightBox: null,
   scenarioType: null,
   scenario: null,
@@ -223,6 +244,9 @@ async function loadCases() {
     state.cases = data.cases || [];
     renderList();
     setServerStatus("ok", `${state.cases.length} 个用例`);
+    // The memory view is corpus-level, so a background case refresh must not
+    // yank the operator back into a per-case screen they left on purpose.
+    if (state.view === "memory") return;
     if (state.activeId) {
       const exists = state.cases.some((c) => c.id === state.activeId);
       if (!exists) selectCase(null);
@@ -267,7 +291,7 @@ function renderList() {
       ? `<span class="duration-chip">${escapeHtml(c.duration_display)}</span>`
       : "";
     return `
-      <button class="case-card ${c.id === state.activeId ? "active" : ""}" data-id="${escapeHtml(c.id)}">
+      <button class="case-card ${c.id === state.activeId && state.view === "case" ? "active" : ""}" data-id="${escapeHtml(c.id)}">
         <div class="case-card-top">
           <span class="case-card-title">${escapeHtml(c.name || c.id)}</span>
           ${metric}
@@ -288,6 +312,7 @@ function renderList() {
 }
 
 async function selectCase(id) {
+  hideMemoryView();
   state.activeId = id;
   renderList();
   if (!id) {
@@ -686,7 +711,10 @@ els.search.addEventListener("input", () => {
   renderList();
 });
 
-els.refresh.addEventListener("click", () => loadCases());
+els.refresh.addEventListener("click", () => {
+  loadCases();
+  if (state.view === "memory") loadMemory();
+});
 
 // --- 发起新的分析 / 任务状态 ---
 let jobsTimer = null;
@@ -1107,6 +1135,533 @@ function setupFormValidation() {
     });
   }
 }
+
+// --- 记忆库：语料级视图，不属于任何单个用例 ---
+// 信任级别是这一屏的主角。方案第七节要求"agent 刚猜出来的东西"和
+// "多案例验证过的规律"在数据上和界面上都不能混为一谈，所以列表默认按
+// trust 过滤，且每条都带上 status_reason —— 没有理由的状态就是不可审计的状态。
+const TRUST_LABEL = {
+  verified: "已验证",
+  consolidated: "已验证",
+  active: "生效",
+  candidate: "候选",
+  archived: "已归档",
+  superseded: "已归档",
+};
+const TRUST_BUCKETS = ["verified", "active", "candidate", "archived"];
+const TYPE_LABEL = {
+  semantic: "语义",
+  episodic: "案例",
+  procedural: "流程",
+  profile: "画像",
+  project: "项目",
+  summary: "摘要",
+};
+const KIND_LABEL = {
+  pattern: "规律",
+  fact: "事实",
+  procedure: "步骤",
+  "anti-pattern": "反模式",
+  profile: "画像",
+  project: "项目",
+  summary: "摘要",
+};
+const ACTOR_LABEL = {
+  "quality-gate": "质量闸门",
+  "conflict-detector": "冲突检测",
+  retention: "时效治理",
+  "dreaming:summarize": "会话摘要",
+  "dreaming:project": "项目摘要",
+  consolidate: "整合",
+};
+const RELATION_LABEL = {
+  contradicts: "矛盾",
+  "duplicate-of": "重复归并",
+  supersedes: "取代",
+  supports: "支持",
+  "derived-from": "派生",
+};
+const JOB_LABEL = {
+  embed: "向量回填",
+  episode: "候选生产",
+  gate_review: "信任复核",
+  deeppromote: "跨案例归纳",
+  conflicts: "冲突扫描",
+  decay: "时效衰减",
+  summarize: "会话摘要",
+  project: "项目摘要",
+};
+
+function trustBucket(trust) {
+  if (trust === "consolidated") return "verified";
+  if (trust === "superseded") return "archived";
+  return TRUST_BUCKETS.includes(trust) ? trust : "candidate";
+}
+
+function trustPill(trust) {
+  return `<span class="pill trust ${trustBucket(trust)}">${escapeHtml(TRUST_LABEL[trust] || trust || "—")}</span>`;
+}
+
+function labelOf(map, key) {
+  return map[key] || key || "—";
+}
+
+function memoryTime(value) {
+  const date = parseIso(value);
+  if (!date) return "—";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function trustCounts(stats) {
+  const counts = { verified: 0, active: 0, candidate: 0, archived: 0 };
+  Object.entries((stats && stats.by_trust) || {}).forEach(([key, value]) => {
+    counts[trustBucket(key)] += Number(value || 0);
+  });
+  return counts;
+}
+
+function memoryMetricCards(stats) {
+  const cards = [
+    ["记忆条目", stats.memories],
+    ["历史案例", stats.episodes],
+    ["会话", stats.sessions],
+    ["矛盾对", stats.contradictions],
+    ["版本记录", stats.versions],
+    ["关系链接", stats.links],
+    ["已过期", stats.expired],
+  ];
+  return `<div class="grid metrics">${cards.map(([label, value]) => `
+    <div class="card">
+      <div class="metric-value">${escapeHtml(String(value ?? 0))}</div>
+      <div class="metric-label">${escapeHtml(label)}</div>
+    </div>`).join("")}</div>`;
+}
+
+function distChips(map, labels) {
+  const entries = Object.entries(map || {}).filter(([, value]) => Number(value) > 0);
+  if (!entries.length) return "";
+  return entries
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .map(([key, value]) => `<span class="chip">${escapeHtml(labelOf(labels, key))}<b class="chip-count">${escapeHtml(String(value))}</b></span>`)
+    .join("");
+}
+
+function distBlock(title, chips) {
+  if (!chips) return "";
+  return `<div class="dist-block"><div class="dist-title">${escapeHtml(title)}</div><div class="dist-row">${chips}</div></div>`;
+}
+
+function memoryTrustCard(stats) {
+  const counts = trustCounts(stats);
+  const total = TRUST_BUCKETS.reduce((sum, name) => sum + counts[name], 0);
+  const bar = total
+    ? TRUST_BUCKETS
+        .filter((name) => counts[name] > 0)
+        .map((name) => `<i class="${name}" style="width:${((counts[name] / total) * 100).toFixed(2)}%" title="${escapeHtml(TRUST_LABEL[name])} ${counts[name]}"></i>`)
+        .join("")
+    : "";
+  const legend = TRUST_BUCKETS.map((name) => `
+    <span><i class="${name}"></i>${escapeHtml(TRUST_LABEL[name])}<b>${counts[name]}</b></span>`).join("");
+  return `
+    <div class="card wide">
+      <h3>信任分布</h3>
+      <div class="trust-bar">${bar}</div>
+      <div class="dist-legend">${legend}</div>
+      ${distBlock("记忆类型", distChips(stats.by_type, TYPE_LABEL))}
+      ${distBlock("内容形态", distChips(stats.by_kind, KIND_LABEL))}
+    </div>`;
+}
+
+function renderMemoryTrustFilter(stats) {
+  const counts = trustCounts(stats);
+  const total = TRUST_BUCKETS.reduce((sum, name) => sum + counts[name], 0);
+  const options = [["all", "全部", total]].concat(
+    TRUST_BUCKETS.map((name) => [name, TRUST_LABEL[name], counts[name]])
+  );
+  els.memoryTrustFilter.innerHTML = options.map(([value, label, count]) => `
+    <button type="button" data-trust="${escapeHtml(value)}" class="${state.memoryTrust === value ? "active" : ""}">
+      ${escapeHtml(label)}<span class="seg-count">${escapeHtml(String(count))}</span>
+    </button>`).join("");
+  els.memoryTrustFilter.querySelectorAll("button").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.memoryTrust = button.dataset.trust;
+      renderMemoryTrustFilter((state.memory || {}).stats);
+      renderMemoryBody();
+    });
+  });
+}
+
+function filteredMemories() {
+  const items = (state.memory && state.memory.recent) || [];
+  const q = state.memoryQuery.trim().toLowerCase();
+  return items.filter((m) => {
+    if (state.memoryTrust !== "all" && trustBucket(m.trust) !== state.memoryTrust) return false;
+    if (!q) return true;
+    return [m.topic, m.content, m.scenario_type, m.memory_id, m.kind, m.type, m.status_reason]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(q));
+  });
+}
+
+function memoryTable(memories) {
+  if (!memories.length) {
+    return `<div class="card wide"><div class="empty-note">没有匹配的记忆条目</div></div>`;
+  }
+  const rows = memories.map((m) => `
+    <tr>
+      <td class="memory-main">
+        <div class="memory-topic">${escapeHtml(m.topic || "(无主题)")}</div>
+        <div class="memory-content">${escapeHtml(m.content || "")}</div>
+        ${m.status_reason ? `<div class="memory-reason">${escapeHtml(m.status_reason)}</div>` : ""}
+      </td>
+      <td><div class="memory-tags">
+        <span class="chip">${escapeHtml(labelOf(TYPE_LABEL, m.type))}</span>
+        <span class="chip">${escapeHtml(labelOf(KIND_LABEL, m.kind))}</span>
+        ${m.scenario_type ? `<span class="chip">${escapeHtml(m.scenario_type)}</span>` : ""}
+      </div></td>
+      <td>${trustPill(m.trust)}</td>
+      <td class="memory-num">${escapeHtml(String(m.confidence ?? 0))}</td>
+      <td class="memory-num" title="独立 run 数 / 累计出现次数">${escapeHtml(String(m.distinct_runs ?? 0))} / ${escapeHtml(String(m.occurrences ?? 0))}</td>
+      <td class="memory-time">${escapeHtml(memoryTime(m.updated_at))}${m.expires_at ? `<div title="过期时间">→ ${escapeHtml(memoryTime(m.expires_at))}</div>` : ""}</td>
+      <td class="memory-id">${escapeHtml(m.memory_id || "")}</td>
+    </tr>`).join("");
+  return `
+    <div class="table-wrap">
+      <table class="memory-table">
+        <thead><tr>
+          <th>记忆</th><th>类型</th><th>信任</th><th>置信</th><th>Run / 出现</th><th>更新</th><th>ID</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function govCard(title, body) {
+  return `<div class="card"><h3>${escapeHtml(title)}</h3>${body}</div>`;
+}
+
+function versionList(versions) {
+  if (!versions || !versions.length) return `<div class="gov-empty">暂无信任跃迁记录</div>`;
+  const items = versions.map((v) => `
+    <li class="gov-item">
+      <div class="gov-head">
+        <span class="gov-title">${escapeHtml(v.memory_id || "")}</span>
+        <span class="gov-meta">v${escapeHtml(String(v.version ?? 1))} · ${escapeHtml(memoryTime(v.created_at))}</span>
+      </div>
+      <div class="gov-detail">${trustPill(v.trust)}<span class="gov-conf">置信 ${escapeHtml(String(v.confidence ?? 0))}</span></div>
+      <div class="gov-note">${escapeHtml(v.reason || "")}${v.actor ? ` · ${escapeHtml(labelOf(ACTOR_LABEL, v.actor))}` : ""}</div>
+    </li>`).join("");
+  return `<ul class="gov-list">${items}</ul>`;
+}
+
+function linkList(links, emptyText) {
+  if (!links || !links.length) return `<div class="gov-empty">${escapeHtml(emptyText)}</div>`;
+  const items = links.map((link) => `
+    <li class="gov-item${link.relation === "contradicts" ? " warn" : ""}">
+      <div class="gov-head">
+        <span class="gov-title">${escapeHtml(labelOf(RELATION_LABEL, link.relation))}</span>
+        <span class="gov-meta">${escapeHtml(memoryTime(link.created_at))}</span>
+      </div>
+      <div class="gov-detail memory-id">${escapeHtml(link.memory_id || "")} → ${escapeHtml(link.related_memory_id || "")}</div>
+      ${link.evidence ? `<div class="gov-note">${escapeHtml(String(link.evidence))}</div>` : ""}
+    </li>`).join("");
+  return `<ul class="gov-list">${items}</ul>`;
+}
+
+function queueList(queue) {
+  if (!queue || !queue.length) return `<div class="gov-empty">队列为空，没有待处理的治理任务</div>`;
+  const items = queue.map((job) => {
+    const target = job.episode_id || job.session_id || job.scenario_type || "";
+    return `
+    <li class="gov-item">
+      <div class="gov-head">
+        <span class="gov-title">${escapeHtml(labelOf(JOB_LABEL, job.kind))}</span>
+        <span class="gov-meta">${escapeHtml(String(job.kind || ""))}</span>
+      </div>
+      ${target ? `<div class="gov-detail memory-id">${escapeHtml(String(target))}</div>` : ""}
+    </li>`;
+  }).join("");
+  return `<ul class="gov-list">${items}</ul>`;
+}
+
+function batchSummary(batch) {
+  const rows = [
+    ["向量回填", batch.embedded],
+    ["处理案例", batch.processed],
+    ["新建记忆", (batch.created || []).length],
+    ["信任跃迁", (batch.trust_changed || []).length],
+    ["矛盾对", batch.conflicts],
+    ["重复归并", batch.duplicates],
+    ["交叉佐证", batch.supports],
+    ["取代", (batch.superseded || []).length],
+    ["归档", (batch.archived || []).length],
+    ["过期清理", batch.expired],
+    ["时效标记", batch.stamped],
+    ["会话摘要", (batch.summarized || []).length],
+    ["项目摘要", (batch.projects || []).length],
+    ["错误", batch.errors],
+  ].filter(([, value]) => Number(value || 0) > 0);
+  if (!rows.length) return "本轮没有需要处理的变更，记忆库已处于稳定状态。";
+  return `本轮治理完成：<ul>${rows.map(([label, value]) => `<li>${escapeHtml(label)} ${escapeHtml(String(value))}</li>`).join("")}</ul>`;
+}
+
+function coverageBar(done, total, cls) {
+  const span = total > 0 ? Math.min(100, (Number(done) / Number(total)) * 100) : 0;
+  const rest = Math.max(0, 100 - span);
+  return `<div class="trust-bar" title="${escapeHtml(String(done))} / ${escapeHtml(String(total))}">
+    <i class="${escapeHtml(cls)}" style="width:${span.toFixed(2)}%"></i>
+    <i class="archived" style="width:${rest.toFixed(2)}%"></i>
+  </div>`;
+}
+
+function memorySemanticCard(emb) {
+  const head = "<h3>语义索引</h3>";
+  if (!emb) return `<div class="card">${head}<div class="gov-empty">未提供语义覆盖数据</div></div>`;
+  if (emb.error) return `<div class="card">${head}<div class="gov-empty">读取失败：${escapeHtml(String(emb.error))}</div></div>`;
+  if (!emb.available) {
+    const reason = emb.reason ? ` · ${escapeHtml(String(emb.reason))}` : "";
+    return `<div class="card">${head}<div class="gov-empty">未启用 · 仅词法召回${reason}</div></div>`;
+  }
+  const rows = [
+    ["提供方", emb.kind || "—"],
+    ["模型", emb.model || "—"],
+    ["维度", String(emb.dim ?? 0)],
+    ["向量存储", emb.vector_store ? "支持" : "不支持"],
+  ];
+  const memDone = Number(emb.memories_embedded || 0);
+  const memTotal = Number(emb.memories || 0);
+  const epDone = Number(emb.episodes_embedded || 0);
+  const epTotal = Number(emb.episodes || 0);
+  const stale = Number(emb.stale || 0);
+  const unembedded = Number(emb.unembedded || 0);
+  const chips = [
+    stale > 0 ? `<span class="chip">待重建<b class="chip-count">${stale}</b></span>` : "",
+    unembedded > 0 ? `<span class="chip">未向量化<b class="chip-count">${unembedded}</b></span>` : "",
+    stale === 0 && unembedded === 0 ? `<span class="chip">全部向量化<b class="chip-count">${memDone + epDone}</b></span>` : "",
+  ].filter(Boolean).join("");
+  return `<div class="card">${head}
+    <dl class="kv">${rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(String(v))}</dd>`).join("")}</dl>
+    <div class="dist-block"><div class="dist-title">记忆向量化 ${memDone} / ${memTotal}</div>${coverageBar(memDone, memTotal, "verified")}</div>
+    <div class="dist-block"><div class="dist-title">案例向量化 ${epDone} / ${epTotal}</div>${coverageBar(epDone, epTotal, "active")}</div>
+    <div class="dist-row">${chips}</div>
+    ${emb.last_error ? `<div class="gov-note">${escapeHtml(String(emb.last_error))}</div>` : ""}
+  </div>`;
+}
+
+function renderMemoryBody() {
+  const data = state.memory;
+  if (!data) return;
+  const stats = data.stats || {};
+  if (stats.error) {
+    els.memoryBody.innerHTML = `<div class="card wide"><div class="empty-note">记忆库统计读取失败：${escapeHtml(stats.error)}</div></div>`;
+    return;
+  }
+  const memories = filteredMemories();
+  const flash = state.memoryFlash
+    ? `<div class="memory-flash ${escapeHtml(state.memoryFlash.kind)}">${state.memoryFlash.html}</div>`
+    : "";
+  const merged = [].concat(data.duplicates || [], data.superseded || []);
+  els.memoryBody.innerHTML = `
+    ${flash}
+    ${memoryMetricCards(stats)}
+    <div class="grid" style="margin-top:14px">${memoryTrustCard(stats)}</div>
+    <div class="section-head">记忆条目 · ${memories.length} / ${data.total ?? memories.length}</div>
+    ${memoryTable(memories)}
+    <div class="section-head">治理记录</div>
+    <div class="memory-grid">
+      ${memorySemanticCard(data.embedding)}
+      ${govCard("最近信任跃迁", versionList(data.recent_versions))}
+      ${govCard("矛盾对", linkList(data.contradictions, "没有互相矛盾的记忆"))}
+      ${govCard("交叉佐证", linkList(data.supports, "没有跨案例相互佐证的记忆"))}
+      ${govCard("重复归并与取代", linkList(merged, "没有归并或取代记录"))}
+      ${govCard("待处理队列", queueList(data.queue))}
+    </div>`;
+}
+
+async function loadMemory() {
+  els.memorySubtitle.textContent = "加载中…";
+  try {
+    state.memory = await fetchJson("/api/memory/overview?limit=200");
+  } catch (err) {
+    state.memory = null;
+    els.memorySubtitle.textContent = "记忆库加载失败，请重试。";
+    els.memoryBody.innerHTML = `<div class="card wide"><div class="empty-note">无法读取 /api/memory/overview：${escapeHtml(err.message)}</div></div>`;
+    return;
+  }
+  const stats = state.memory.stats || {};
+  const namespace = stats.namespace || state.memory.namespace || "default";
+  els.memoryCrumbs.textContent = `memory / ${namespace}`;
+  els.memorySubtitle.textContent = [
+    `${stats.store || state.memory.store || "unknown"} 存储`,
+    `${stats.memories ?? 0} 条记忆`,
+    `${stats.episodes ?? 0} 个案例`,
+    `${stats.sessions ?? 0} 个会话`,
+    state.memory.root || "",
+  ].filter(Boolean).join(" · ");
+  renderMemoryTrustFilter(stats);
+  renderMemoryBody();
+}
+
+async function runMemoryMaintain() {
+  const button = els.memoryMaintain;
+  button.disabled = true;
+  button.textContent = "治理中…";
+  state.memoryFlash = null;
+  try {
+    const res = await fetch("/api/memory/maintain", { method: "POST" });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok || payload.status !== "ok") {
+      throw new Error(payload.error || `HTTP ${res.status}`);
+    }
+    state.memoryFlash = { kind: "ok", html: batchSummary(payload.batch || {}) };
+  } catch (err) {
+    state.memoryFlash = { kind: "err", html: `治理失败：${escapeHtml(err.message)}` };
+  } finally {
+    button.disabled = false;
+    button.textContent = "立即治理";
+  }
+  await loadMemory();
+}
+
+// ------------------------------------------------------------------ recall probe
+//
+// Runs a real recall against the live corpus through the same endpoint a run
+// uses, so the dashboard can answer "what would an analysis actually see for
+// this query" without starting one. The two numbers worth reading are the ones
+// section 9 asks for and a hit list alone cannot give: how long retrieval took,
+// and whether the composer dropped ranked hits because the prompt budget ran out.
+
+function probeHitId(hit) {
+  const memory = (hit || {}).memory || {};
+  return String(memory.memory_id || memory.episode_id || "");
+}
+
+function probeMetaChips(result) {
+  const hits = result.hits || [];
+  const injected = new Set(result.injected_ids || []);
+  const chars = String(result.context_prompt || "").length;
+  const truncatedChip = result.truncated
+    ? `<span class="chip truncated" title="排序结果超出提示词预算，末尾条目被整条丢弃">已截断</span>`
+    : `<span class="chip" title="全部命中都进入了提示词">未截断</span>`;
+  return [
+    `<span class="chip" title="本次召回的服务端耗时，缓存命中时为查缓存的耗时">耗时<b class="chip-count">${escapeHtml(Number(result.latency_ms || 0).toFixed(2))} ms</b></span>`,
+    `<span class="chip">命中<b class="chip-count">${hits.length}</b></span>`,
+    `<span class="chip" title="真正渲染进提示词的条目数">注入<b class="chip-count">${injected.size}</b></span>`,
+    `<span class="chip">提示词<b class="chip-count">${chars} 字</b></span>`,
+    truncatedChip,
+  ].join("");
+}
+
+function probeRows(hits, injected) {
+  return hits.map((hit) => {
+    const memory = hit.memory || {};
+    const id = probeHitId(hit);
+    const isEpisode = Boolean(memory.episode_id);
+    const kindChip = isEpisode
+      ? `<span class="chip">${escapeHtml(labelOf(TYPE_LABEL, "episodic"))}</span>`
+      : `<span class="chip">${escapeHtml(labelOf(KIND_LABEL, memory.kind))}</span>`;
+    const injectChip = injected.has(id)
+      ? `<span class="chip" title="该条目进入了提示词，模型看到了它">已注入</span>`
+      : `<span class="chip" title="被预算或类型配额丢弃，模型没有看到它">未注入</span>`;
+    const trust = memory.status || (isEpisode ? "episode" : "");
+    return `<tr>
+      <td class="memory-main">
+        <div class="memory-topic">${escapeHtml(memory.topic || memory.scenario || "(无主题)")}</div>
+        <div class="memory-content">${escapeHtml(memory.content || memory.summary || "")}</div>
+      </td>
+      <td><div class="memory-tags">${kindChip}${injectChip}</div></td>
+      <td>${trustPill(trust)}</td>
+      <td class="memory-num">${escapeHtml(Number(hit.score || 0).toFixed(4))}</td>
+      <td class="memory-num" title="词法相关度 / 语义余弦">${escapeHtml(Number(hit.lexical || 0).toFixed(3))} / ${escapeHtml(Number(hit.semantic || 0).toFixed(3))}</td>
+      <td class="memory-id">${escapeHtml(id)}</td>
+    </tr>`;
+  }).join("");
+}
+
+function renderProbeResult(result) {
+  const hits = result.hits || [];
+  const meta = `<div class="memory-probe-meta">${probeMetaChips(result)}</div>`;
+  if (!hits.length) {
+    return `${meta}<div class="memory-probe-result"><div class="gov-empty">没有命中：查询与语料无关，或候选记忆未达到相关性下限。</div></div>`;
+  }
+  const injected = new Set(result.injected_ids || []);
+  return `${meta}<div class="memory-probe-result"><div class="table-wrap">
+    <table class="memory-table">
+      <thead><tr><th>记忆</th><th>类型</th><th>信任</th><th>得分</th><th>词法 / 语义</th><th>ID</th></tr></thead>
+      <tbody>${probeRows(hits, injected)}</tbody>
+    </table>
+  </div></div>`;
+}
+
+async function runMemoryProbe() {
+  const query = els.memoryProbeQuery.value.trim();
+  if (!query) {
+    els.memoryProbeResult.innerHTML = `<div class="gov-empty">先输入一个查询。</div>`;
+    els.memoryProbeQuery.focus();
+    return;
+  }
+  const button = els.memoryProbeRun;
+  button.disabled = true;
+  button.textContent = "召回中…";
+  els.memoryProbeResult.innerHTML = `<div class="gov-empty">召回中…</div>`;
+  const scenario = els.memoryProbeScenario.value;
+  const params = new URLSearchParams({ query });
+  if (scenario) params.set("scenario_type", scenario);
+  try {
+    const result = await fetchJson(`/api/memory/recall?${params.toString()}`);
+    els.memoryProbeResult.innerHTML = renderProbeResult(result || {});
+  } catch (err) {
+    els.memoryProbeResult.innerHTML = `<div class="gov-empty">召回失败：${escapeHtml(err.message)}</div>`;
+  } finally {
+    button.disabled = false;
+    button.textContent = "试跑";
+  }
+}
+
+function toggleMemoryProbe() {
+  state.memoryProbeOpen = !state.memoryProbeOpen;
+  els.memoryProbe.classList.toggle("hidden", !state.memoryProbeOpen);
+  els.memoryProbeToggle.classList.toggle("ghost-btn", state.memoryProbeOpen);
+  if (state.memoryProbeOpen) els.memoryProbeQuery.focus();
+}
+
+function openMemoryView() {
+  state.view = "memory";
+  els.detail.classList.add("hidden");
+  els.empty.classList.add("hidden");
+  els.memoryView.classList.remove("hidden");
+  els.memoryOpen.classList.add("on");
+  renderList();
+  loadMemory();
+}
+
+function hideMemoryView() {
+  if (state.view !== "memory") return;
+  state.view = "case";
+  els.memoryView.classList.add("hidden");
+  els.memoryOpen.classList.remove("on");
+}
+
+function closeMemoryView() {
+  hideMemoryView();
+  renderList();
+  if (state.activeId) els.detail.classList.remove("hidden");
+  else els.empty.classList.remove("hidden");
+}
+
+els.memoryOpen.addEventListener("click", openMemoryView);
+els.memoryBack.addEventListener("click", closeMemoryView);
+els.memoryMaintain.addEventListener("click", runMemoryMaintain);
+els.memoryProbeToggle.addEventListener("click", toggleMemoryProbe);
+els.memoryProbeRun.addEventListener("click", runMemoryProbe);
+els.memoryProbeQuery.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") runMemoryProbe();
+});
+els.memorySearch.addEventListener("input", () => {
+  state.memoryQuery = els.memorySearch.value;
+  renderMemoryBody();
+});
 
 function init() {
   bindFormFields();

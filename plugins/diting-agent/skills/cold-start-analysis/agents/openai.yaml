@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cold Start Analysis"
+  short_description: "Analyze cold-start latency and first-frame paths"
+  default_prompt: "Use $cold-start-analysis to analyze this launch-to-first-frame Trace."

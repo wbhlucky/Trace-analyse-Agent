@@ -11,7 +11,7 @@ import time
 import uuid
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,7 +28,9 @@ from trace_agent.memory import (
     SessionMemory,
     SessionRole,
     default_memory_runtime,
+    memory_type_for,
 )
+from trace_agent.memory.flags import memory_dream_interval, memory_maintain_every
 from trace_agent.errors import (
     AgentFailure,
     ErrorCategory,
@@ -552,6 +554,10 @@ def _run_analysis_job(job: AnalysisJob, project_root: Path, results_root: Path) 
                 run_id=job.id,
                 cancel_event=job.cancel_event,
                 resume_from=params.get("resume"),
+                # The dashboard knows which conversation launched this run;
+                # passing it is what stamps ``episodes.session_id`` and makes
+                # "what did this session conclude" a filter instead of a scan.
+                session_id=params.get("session_id"),
             )
         )
 
@@ -601,6 +607,93 @@ def _run_dream_cycle(project_root: Path) -> None:
         runtime.dreaming.run_once(limit=20)
     except Exception:
         return
+
+def _run_memory_maintenance() -> dict[str, Any]:
+    """Run the governance chain once and report what moved.
+
+    Exposed as an endpoint as well as a timer tick because the moment an
+    operator notices two memories disagreeing is exactly the moment they should
+    be able to resolve it, without waiting for the next scheduled sweep or
+    finding a terminal.
+    """
+    runtime = _memory_runtime()
+    try:
+        batch = runtime.dreaming.maintain()
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+    return {"status": "ok", "batch": batch.as_dict()}
+
+def _memory_overview() -> dict[str, Any]:
+    """Corpus shape plus the governance trail, for the dashboard's memory tab.
+
+    Counts alone would answer "is memory populated" and nothing else. The
+    interesting operational questions are the ones section 14 asks: is anything
+    stuck at ``candidate``, does the corpus contradict itself, and did trust
+    move recently on real evidence. Those need the version and link rows, so
+    they are served alongside the stats in one request.
+    """
+    runtime = _memory_runtime()
+    store = runtime.store
+    payload: dict[str, Any] = {
+        "namespace": str(getattr(store, "namespace", "") or ""),
+        "store": str(getattr(store, "store_kind", "") or ""),
+        "root": str(getattr(store, "root", "") or ""),
+    }
+    try:
+        payload["stats"] = asdict(store.stats())
+    except Exception as exc:
+        payload["stats"] = {"error": str(exc)}
+    for key, loader in (
+        ("recent_versions", lambda: store.recent_versions(limit=25)),
+        ("contradictions", lambda: store.list_links("contradicts", limit=50)),
+        ("duplicates", lambda: store.list_links("duplicate-of", limit=50)),
+        ("superseded", lambda: store.list_links("supersedes", limit=50)),
+        ("supports", lambda: store.list_links("supports", limit=50)),
+        ("queue", lambda: store.read_dream_jobs(limit=25)),
+    ):
+        try:
+            payload[key] = loader()
+        except Exception:
+            payload[key] = []
+    # Semantic coverage rides along with the stats. "Paraphrase recall returns
+    # nothing" is unanswerable without knowing whether the corpus is embedded,
+    # with which recipe, and how much of it is stale - the same reason
+    # ``memory stats`` prints it. ``semantic`` is always present on the runtime;
+    # only ``coverage()`` touches the store, so that call is the guarded one.
+    semantic = getattr(runtime, "semantic", None)
+    if semantic is not None:
+        try:
+            payload["embedding"] = semantic.coverage()
+        except Exception as exc:
+            payload["embedding"] = {"error": str(exc)}
+    return payload
+
+def _memory_card(memory: Any) -> dict[str, Any]:
+    """Compact projection of one curated memory for the dashboard list.
+
+    Not ``model_dump``: a memory carries provenance, keywords and timestamps
+    that a table row does not need, and the list is re-fetched on every tab
+    open. Everything shown in the row is here, including the trust level and the
+    reason behind it, because a status without its reason is exactly the
+    unauditable state section 7 exists to prevent.
+    """
+    return {
+        "memory_id": memory.memory_id,
+        "kind": memory.kind.value,
+        "type": memory_type_for(memory.kind).value,
+        "topic": memory.topic,
+        "content": memory.content[:220],
+        "scenario_type": memory.scenario_type,
+        "trust": memory.status.value,
+        "status_reason": memory.status_reason or "",
+        "confidence": round(float(memory.confidence), 3),
+        "distinct_runs": memory.distinct_runs,
+        "occurrences": memory.occurrences,
+        "updated_at": memory.updated_at.isoformat(),
+        "expires_at": (
+            memory.expires_at.isoformat() if memory.expires_at else None
+        ),
+    }
 
 def _submit_analysis(params: dict[str, Any], project_root: Path, results_root: Path) -> dict[str, Any]:
     job = AnalysisJob(id=f"job-{uuid.uuid4().hex[:12]}", params=params)
@@ -802,6 +895,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"status": "ok"})
             return
 
+        if path == "/api/memory/overview":
+            from urllib.parse import parse_qs
+
+            overview = _memory_overview()
+            requested = parse_qs(parsed.query).get("limit", ["25"])[0]
+            try:
+                limit = max(1, min(200, int(requested)))
+            except ValueError:
+                limit = 25
+            try:
+                memories = _memory_runtime().store.list_curated(active_only=False)
+            except Exception:
+                memories = []
+            memories.sort(key=lambda item: item.updated_at, reverse=True)
+            overview["recent"] = [
+                _memory_card(item) for item in memories[:limit]
+            ]
+            overview["total"] = len(memories)
+            self._send_json(overview)
+            return
+
+        if path == "/api/memory/maintain":
+            self._send_json(_run_memory_maintenance())
+            return
+
         if path == "/api/preflight" or path == "/api/preflight/":
             self._send_json(_preflight(self.project_root))
             return
@@ -880,6 +998,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._cancel_run(cancel_job_id)
             return
 
+        # Governance is a state change, so it is POST-only; the GET route stays
+        # for curl-style inspection from a terminal.
+        if path == "/api/memory/maintain":
+            self._send_json(_run_memory_maintenance())
+            return
+
         if path == "/api/memory/sessions":
             try:
                 length = int(self.headers.get("Content-Length") or 0)
@@ -894,6 +1018,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 title=str(body.get("title") or ""),
                 topic=str(body.get("topic") or ""),
                 session_id=body.get("session_id"),
+                # ``None`` (an omitted key) falls through to the environment
+                # default inside the service, so a client that sends nothing
+                # still gets an owned row.
+                agent_id=body.get("agent_id"),
+                user_id=body.get("user_id"),
+                project_id=body.get("project_id"),
             )
             self._send_json({"session": session.model_dump(mode="json")}, HTTPStatus.CREATED)
             return
@@ -1003,10 +1133,19 @@ def serve(
     )
     bound_port = _get_free_port(host, port)
     def _dreaming_loop() -> None:
+        maintain_every = memory_maintain_every()
+        tick = 0
         while True:
-            time.sleep(float(os.environ.get("TRACE_AGENT_MEMORY_DREAM_INTERVAL", "30")))
+            time.sleep(memory_dream_interval())
+            tick += 1
             try:
-                _memory_runtime().dreaming.run_once(limit=20)
+                runtime = _memory_runtime()
+                runtime.dreaming.run_once(limit=20)
+                # Queued jobs drain every tick; the corpus-wide governance sweep
+                # (conflicts, gate, retention, session digests) rides along only
+                # every Nth tick because it re-reads the whole corpus.
+                if tick % maintain_every == 0:
+                    runtime.dreaming.maintain()
             except Exception:
                 continue
 

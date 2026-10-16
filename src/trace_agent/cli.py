@@ -20,6 +20,7 @@ from trace_agent.cli_progress import CliProgressRenderer
 from trace_agent.config import LlmRuntimeConfig, save_project_llm_config
 from trace_agent.errors import AgentFailure, RunInterrupted, classify_exception
 from trace_agent.eval.cli import eval_app
+from trace_agent.memory.cli import memory_app
 from trace_agent.models import (
     AgentKind,
     AnalyzeRequest,
@@ -530,3 +531,4 @@ def analyze(
 
 
 app.add_typer(eval_app)
+app.add_typer(memory_app)

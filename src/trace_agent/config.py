@@ -53,7 +53,7 @@ def save_project_llm_config(
     """Persist the existing DeepSeek BYOK config without exposing its key."""
     api_key = api_key.strip()
     if not api_key:
-        raise ValueError("DeepSeek API Key 涓嶈兘涓虹┖")
+        raise ValueError("DeepSeek API Key 不能为空")
 
     path = project_root / ".env"
     existing = _read_dotenv(path)
@@ -124,8 +124,7 @@ class LlmRuntimeConfig:
         )
         if not api_key:
             raise ValueError(
-                "DeepSeek API Key 鏈厤缃紱璇峰湪椤圭洰 .env 涓～鍐?"
-                "DEEPSEEK_API_KEY"
+                "DeepSeek API Key 未配置；请在项目 .env 中填写 DEEPSEEK_API_KEY"
             )
 
         configured_model = (

@@ -602,6 +602,11 @@ class RunManifest(StrictModel):
     started_at: datetime = Field(default_factory=utc_now)
     completed_at: datetime | None = None
     error: str | None = None
+    #: What memory did to this run: the query, the hits, which of them reached
+    #: the prompt, and what was written back afterwards. Typed as a plain dict
+    #: so the top-level models module does not import the memory package - the
+    #: value is a :class:`trace_agent.memory.models.MemoryTrace` dump.
+    memory_trace: dict[str, Any] | None = None
 
 
 class RunResult(StrictModel):

@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import Iterator
+from typing import Any, Iterator
 from uuid import uuid4
 
 from trace_agent.agent import AnalysisAgent, AnalysisAgentFactory
@@ -36,6 +36,17 @@ from trace_agent.memory import (
     default_memory_runtime,
     memory_enabled_explicit,
 )
+from trace_agent.memory.flags import (
+    memory_inline_governance,
+    memory_prompt_chars,
+)
+from trace_agent.memory.models import (
+    CuratedMemory,
+    EpisodicMemory,
+    MemoryTrace,
+    MemoryTraceHit,
+)
+from trace_agent.memory.rerank import episode_trust
 from trace_agent.models import (
     AnalysisResult,
     AnalyzeRequest,
@@ -104,6 +115,73 @@ def _memory_query(request: AnalyzeRequest) -> str:
         parts.append(request.build)
     return " ".join(parts)
 
+
+def _memory_trace(
+    runtime: MemoryRuntime,
+    recall: Any,
+    *,
+    latency_ms: float,
+) -> MemoryTrace:
+    """Project one recall onto the per-run trace stored in ``run.json``.
+
+    Section 9's question - "did a recalled memory influence this conclusion" -
+    is only answerable from what actually reached the prompt, so ``injected``
+    comes from :attr:`RecallResult.injected_ids` rather than from the hit list.
+    A hit the composer dropped for budget reasons must not be recorded as a
+    prior the model saw.
+
+    ``truncated`` is carried for the same reason, and is read defensively because
+    ``recall`` is typed ``Any`` here: the flag says the composer dropped something
+    it had ranked, which is the difference between "recall found nothing better"
+    and "recall found it and the budget cut it".
+    """
+    store = runtime.store
+    injected = set(recall.injected_ids or ())
+    hits: list[MemoryTraceHit] = []
+    trust_mix: dict[str, int] = {}
+    for hit in recall.hits:
+        memory = hit.memory
+        if isinstance(memory, EpisodicMemory):
+            # An episode has no stored trust column, but it is not trust-free
+            # either: recall and the composer both derive a level from its
+            # findings, so the trace has to report that same derived value. A
+            # fixed "episodic" label here is what let the contamination audit
+            # treat a single-run guess and a corroborated case as one thing.
+            memory_id = memory.episode_id
+            trust = episode_trust(memory).value
+            kind = "episode"
+        elif isinstance(memory, CuratedMemory):
+            memory_id = memory.memory_id
+            trust = memory.status.value
+            kind = memory.kind.value
+        else:  # pragma: no cover - defensive against a new memory shape
+            memory_id = str(getattr(memory, "memory_id", ""))
+            trust = str(getattr(memory, "status", ""))
+            kind = str(getattr(memory, "kind", ""))
+        trust_mix[trust] = trust_mix.get(trust, 0) + 1
+        hits.append(
+            MemoryTraceHit(
+                memory_id=memory_id,
+                trust=trust,
+                kind=kind,
+                score=round(float(hit.score), 4),
+                lexical=round(float(hit.lexical), 4),
+                semantic=round(float(hit.semantic), 4),
+                injected=memory_id in injected,
+            )
+        )
+    return MemoryTrace(
+        query=recall.query,
+        namespace=str(getattr(store, "namespace", "") or ""),
+        store=str(getattr(store, "store_kind", "") or ""),
+        enabled=True,
+        hits=hits,
+        trust_mix=trust_mix,
+        context_chars=len(recall.context_prompt or ""),
+        budget_chars=memory_prompt_chars(),
+        latency_ms=round(latency_ms, 3),
+        truncated=bool(getattr(recall, "truncated", False)),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +258,13 @@ class AnalyzeApplication:
         self._cancel_event: threading.Event | None = None
         self._job_deadline: Deadline | None = None
         self._memory_runtime = memory_runtime
+        # Recall state for the run currently in flight. Declared here rather
+        # than only in ``_prepare_memory`` so a failure before that point cannot
+        # turn into an AttributeError inside the exception handler.
+        self._memory_context: str | None = None
+        self._memory_hits: list[dict[str, Any]] = []
+        self._memory_trace: MemoryTrace | None = None
+        self._resume_snapshot: Any | None = None
         explicit_memory = memory_enabled_explicit()
         self._memory_enabled = (
             memory_enabled
@@ -198,7 +283,16 @@ class AnalyzeApplication:
         resume_from: str | None = None,
         run_id: str | None = None,
         cancel_event: threading.Event | None = None,
+        session_id: str | None = None,
     ) -> RunResult:
+        """Run one analysis.
+
+        ``session_id`` is the conversation this run belongs to, when there is
+        one. It is threaded to the memory write rather than kept on the instance:
+        the dashboard owns the session, an analysis run does not, and a
+        long-lived application object holding "the current session" would be
+        wrong the moment two runs overlap.
+        """
         output_dir = request.output_dir.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
         self._current_run_path = output_dir / "run.json"
@@ -253,23 +347,10 @@ class AnalyzeApplication:
         trace: object | None = None
         tools: object | None = None
         report_path: Path | None = None
-        self._memory_context: str | None = None
-        if self._memory_runtime is None:
-            self._memory_runtime = default_memory_runtime(Path.cwd())
-        self._resume_snapshot = None
-        if self._memory_enabled:
-            try:
-                if resuming:
-                    self._resume_snapshot = self._memory_runtime.resume_plan(
-                        output_dir
-                    )
-                recall = self._memory_runtime.recall(
-                    _memory_query(request),
-                    scenario_type=request.scenario_type.value,
-                )
-                self._memory_context = recall.context_prompt or None
-            except Exception:
-                self._memory_context = None
+        self._prepare_memory(request, output_dir, resuming=resuming)
+        manifest.memory_trace = (
+            self._memory_trace.model_dump() if self._memory_trace else None
+        )
 
         with self._step(
             1,
@@ -335,6 +416,7 @@ class AnalyzeApplication:
                             request,
                             trace,
                             memory_context=self._memory_context,
+                            memory_hits=self._memory_hits,
                         )
                         analysis_agent = selection.agent
                         manifest.skills = [
@@ -560,7 +642,13 @@ class AnalyzeApplication:
                     },
                 )
             if self._memory_enabled and analysis is not None:
-                self._remember_episode(request, analysis, manifest, output_dir)
+                self._remember_episode(
+                    request,
+                    analysis,
+                    manifest,
+                    output_dir,
+                    session_id=session_id,
+                )
             self._write_performance_report(
                 request,
                 output_dir,
@@ -990,25 +1078,236 @@ class AnalyzeApplication:
         analysis: AnalysisResult,
         manifest: RunManifest,
         output_dir: Path,
+        *,
+        session_id: str | None = None,
     ) -> None:
-        """Best-effort capture plus consolidation after a completed run."""
+        """Best-effort capture plus consolidation after a completed run.
+
+        Also closes the observability loop opened by :meth:`_prepare_memory`:
+        the recall half of ``memory_trace`` is written with the run's first
+        manifest flush, and the write half - which episode was projected, which
+        candidates it produced - lands here, followed by one more ``run.json``
+        flush. Two flushes rather than one is deliberate; moving capture before
+        the completion write would put memory latency back on the path a user is
+        waiting on.
+        """
         try:
             episode = build_episode(
                 request,
                 analysis,
                 run_id=manifest.run_id,
                 output_dir=str(output_dir),
+                session_id=session_id,
             )
-            self._memory_runtime.remember_episode(
+            created = self._memory_runtime.remember_episode(
                 episode,
                 consolidate=True,
             )
-            self._memory_runtime.dreaming.enqueue_episode(
+            # Consolidation above already produced the candidates for this run.
+            # Enqueueing a second ``episode`` job made the dreaming beat
+            # consolidate the same run again, which read as an independent
+            # confirmation and promoted a single-run guess to ``active``.
+            self._memory_runtime.dreaming.enqueue_gate_review(
                 episode.episode_id
             )
+            # Refresh the namespace's project digest, so "what does this
+            # project's corpus look like" is answerable by the next run without
+            # anyone having to remember to invoke ``memory maintain``. Queued
+            # *after* the gate review and *before* the embedding backfill: it
+            # reports trust counts, so it has to see this run's verdicts, and the
+            # record it writes still needs a vector.
+            self._memory_runtime.dreaming.enqueue_project_digest()
+            # Backfill vectors for what this run just wrote, so the next
+            # analysis can reach it on meaning and not only on a lexical match.
+            # Queued rather than awaited: the provider call belongs on the beat,
+            # never on the path the user is waiting on. A no-op when embeddings
+            # are off, which is why it is unconditional here.
+            self._memory_runtime.dreaming.enqueue_embed()
         except Exception:
             return
 
+        self._publish(
+            EventType.MEMORY_EPISODE,
+            {
+                "episode_id": episode.episode_id,
+                "run_id": episode.run_id,
+                "scenario_type": episode.scenario_type,
+                "status": episode.status,
+                "root_causes": list(episode.root_causes)[:5],
+            },
+        )
+        self._publish(
+            EventType.MEMORY_CONSOLIDATED,
+            {
+                "episode_id": episode.episode_id,
+                "created": [item.memory_id for item in created],
+                "count": len(created),
+            },
+        )
+        self._extend_memory_trace(
+            manifest,
+            episode_id=episode.episode_id,
+            created=[item.memory_id for item in created],
+        )
+        self._govern_memory(manifest)
+
+    def _govern_memory(self, manifest: RunManifest) -> None:
+        """Sweep the corpus at the end of a run, when no background beat will.
+
+        The dashboard owns a 30s beat and a periodic ``maintain()``; a CLI or eval
+        process owns neither and exits as soon as the report is written. Every
+        job this run enqueued therefore sat in the queue unread, and - the part
+        that actually mattered - the ``supports`` links between this run's
+        conclusions and an earlier run's were never created, so a corpus built
+        from the command line stayed entirely ``candidate`` no matter how many
+        runs agreed with each other.
+
+        Runs after the completion write for the reason the capture docstring
+        gives: the user already has the report. Bounded by the queue limit and by
+        the sweep's own group caps, and wrapped in the same best-effort contract
+        as every other memory call - a locked database must cost a governance
+        beat, never a finished analysis.
+        """
+        if self._memory_runtime is None or not memory_inline_governance():
+            return
+        try:
+            batch = self._memory_runtime.dreaming.drain_inline()
+        except Exception:
+            return
+        for transition in batch.transitions:
+            self._publish(EventType.MEMORY_TRUST, transition.as_dict())
+        self._publish(EventType.MEMORY_MAINTENANCE, batch.as_dict())
+        if batch.trust_changed:
+            self._extend_memory_trace(manifest, trust_changed=batch.trust_changed)
+
+    def _prepare_memory(
+        self,
+        request: AnalyzeRequest,
+        output_dir: Path,
+        *,
+        resuming: bool,
+    ) -> None:
+        """Recall priors for this run and record what happened.
+
+        Every branch is best-effort. Memory is an optimisation over a run that
+        can already succeed without it, so a corrupt store, a locked database or
+        a bad namespace must degrade to "no priors" and never to a failed
+        analysis. The trace is still written in that case, because "recall
+        returned nothing" and "recall was never attempted" are different facts
+        and only the second should look like an empty hit list.
+        """
+        self._memory_context = None
+        self._memory_hits = []
+        self._memory_trace = None
+        self._resume_snapshot = None
+        if self._memory_runtime is None:
+            self._memory_runtime = default_memory_runtime(Path.cwd())
+        runtime = self._memory_runtime
+        namespace = str(getattr(runtime.store, "namespace", "") or "")
+        store_kind = str(getattr(runtime.store, "store_kind", "") or "")
+
+        if not self._memory_enabled:
+            self._memory_trace = MemoryTrace(
+                enabled=False,
+                namespace=namespace,
+                store=store_kind,
+                budget_chars=memory_prompt_chars(),
+            )
+            return
+
+        if resuming:
+            try:
+                self._resume_snapshot = runtime.resume_plan(output_dir)
+            except Exception:
+                self._resume_snapshot = None
+
+        query = _memory_query(request)
+        started = perf_counter()
+        try:
+            recall = runtime.recall(
+                query,
+                scenario_type=request.scenario_type.value,
+            )
+        except Exception:
+            self._memory_trace = MemoryTrace(
+                query=query,
+                namespace=namespace,
+                store=store_kind,
+                budget_chars=memory_prompt_chars(),
+                latency_ms=round((perf_counter() - started) * 1000.0, 3),
+            )
+            return
+        latency_ms = (perf_counter() - started) * 1000.0
+        self._memory_context = recall.context_prompt or None
+        try:
+            self._memory_trace = _memory_trace(
+                runtime, recall, latency_ms=latency_ms
+            )
+        except Exception:
+            return
+        self._memory_hits = [hit.model_dump() for hit in self._memory_trace.hits]
+        trace = self._memory_trace
+        self._publish(
+            EventType.MEMORY_RECALLED,
+            {
+                "query": trace.query,
+                "namespace": trace.namespace,
+                "store": trace.store,
+                "hits": self._memory_hits,
+                "trust_mix": dict(trace.trust_mix),
+                "latency_ms": trace.latency_ms,
+                "truncated": trace.truncated,
+            },
+        )
+        if self._memory_context:
+            self._publish(
+                EventType.MEMORY_INJECTED,
+                {
+                    "mem_ids": list(trace.injected_ids),
+                    "trust_mix": trace.injected_trust_mix,
+                    "chars": trace.context_chars,
+                    "budget_chars": trace.budget_chars,
+                },
+            )
+
+    def _extend_memory_trace(
+        self,
+        manifest: RunManifest,
+        *,
+        episode_id: str | None = None,
+        created: list[str] | None = None,
+        trust_changed: list[str] | None = None,
+    ) -> None:
+        """Fold the write side into ``run.json.memory_trace`` and re-flush."""
+        trace = self._memory_trace
+        if trace is None:
+            return
+        updated = trace.model_copy(
+            update={
+                "episode_id": episode_id or trace.episode_id,
+                "created": list(dict.fromkeys([*trace.created, *(created or [])])),
+                "trust_changed": list(
+                    dict.fromkeys([*trace.trust_changed, *(trust_changed or [])])
+                ),
+            }
+        )
+        self._memory_trace = updated
+        manifest.memory_trace = updated.model_dump()
+        try:
+            self._write_json(self._current_run_path, manifest)
+        except Exception:
+            # The run already completed; losing the trace is not worth failing
+            # the hand-off of a finished analysis.
+            return
+
+    def _publish(self, event_type: EventType, data: dict[str, Any]) -> None:
+        """Publish to the run context when one exists, never raising."""
+        if self._run_context is None:
+            return
+        try:
+            self._run_context.publish(event_type, data=data)
+        except Exception:
+            return
 
 
     def _emit_trace_conversion_progress(self, trace: object) -> None:
@@ -1046,7 +1345,3 @@ class AnalyzeApplication:
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-
-
-
-

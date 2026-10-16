@@ -19,6 +19,7 @@ from trace_agent.eval.models import (
     Trial,
     TrialFailure,
     TrialStatus,
+    TrialMemory,
 )
 from trace_agent.models import (
     AgentKind,
@@ -104,17 +105,36 @@ class TrialRunner:
             self._capture_error(output_dir, exc)
         finally:
             trial.completed_at = utc_now()
+            # Read on every path, not just the successful one. A run that died at
+            # validation still *recalled*, and its manifest still carries the
+            # memory_trace: skipping it here made the report claim "memory off"
+            # for a run where memory was on, which hides precisely the injection
+            # the section 8.4 contamination audit exists to catch.
+            trial.memory = self._read_memory(output_dir)
 
         return trial
 
     def _to_request(self, case: Case, output_dir: Path) -> AnalyzeRequest:
+        case_input = case.input
         return AnalyzeRequest(
             trace_id=case.id,
-            trace_path=case.input.trace,
-            scenario_type=case.input.type,
-            scenario=case.input.scenario,
-            symptom=case.input.symptom,
+            trace_path=case_input.trace,
+            scenario_type=case_input.type,
+            scenario=case_input.scenario,
+            symptom=case_input.symptom,
             output_dir=output_dir,
+            device=case_input.device,
+            build=case_input.build,
+            time_range=case_input.time_range,
+            target_process=case_input.target_process,
+            operation_marker=case_input.operation_marker,
+            start_marker=case_input.start_marker,
+            end_marker=case_input.end_marker,
+            response_marker=case_input.response_marker,
+            completion_marker=case_input.completion_marker,
+            problem_duration_ms=case_input.problem_duration_ms,
+            refresh_rate_hz=case_input.refresh_rate_hz,
+            baseline_trace_path=case_input.baseline_trace_path,
             agent=self._agent,
         )
 
@@ -161,6 +181,19 @@ class TrialRunner:
         # tool log for the deterministic first version; it remains complete
         # and replayable from the persisted artifacts.
         return list(calls)
+
+    @staticmethod
+    def _read_memory(output_dir: Path) -> TrialMemory | None:
+        """Read this trial's ``memory_trace`` out of the run manifest.
+
+        The trace lives in ``run.json`` rather than ``agent-result.json`` because
+        it spans both halves of a run: recall is written before the agent starts
+        and capture is folded in afterwards, and only the manifest covers both.
+        ``None`` means memory was off or the run died before writing one, which
+        the report keeps distinguishable from "recall found nothing".
+        """
+        manifest = TrialRunner._read_json(output_dir / "run.json")
+        return TrialMemory.from_trace(manifest.get("memory_trace"))
 
     @staticmethod
     def _capture_error(output_dir: Path, exc: Exception) -> None:

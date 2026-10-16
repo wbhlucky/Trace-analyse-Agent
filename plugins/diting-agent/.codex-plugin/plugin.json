@@ -1,0 +1,43 @@
+{
+  "name": "diting-agent",
+  "version": "0.1.0",
+  "description": "Evidence-driven performance trace analysis for cold start, response latency, completion latency, and frame jank.",
+  "author": {
+    "name": "wbhlucky",
+    "email": "1433340920@qq.com",
+    "url": "https://github.com/wbhlucky"
+  },
+  "homepage": "https://github.com/wbhlucky/Trace-analyse-Agent",
+  "repository": "https://github.com/wbhlucky/Trace-analyse-Agent",
+  "keywords": [
+    "performance",
+    "trace-analysis",
+    "htrace",
+    "trace-streamer",
+    "cold-start",
+    "latency",
+    "frame-jank",
+    "perf-samples",
+    "profiling"
+  ],
+  "skills": "./skills",
+  "interface": {
+    "displayName": "DitingAgent",
+    "shortDescription": "Evidence-driven performance trace analysis",
+    "longDescription": "DitingAgent turns a .htrace capture plus a symptom description into a traceable performance diagnosis. It converts the trace with the bundled Trace Streamer, exposes bounded read-only trace tools, routes to the matching scenario methodology (cold start, response latency, completion latency, frame jank), correlates perf samples with the critical path, and renders a self-contained HTML report with evidence IDs. This plugin ships that methodology plus the CLI workflow so any Codex session can drive an analysis and read the result.",
+    "developerName": "wbhlucky",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read"
+    ],
+    "websiteURL": "https://github.com/wbhlucky/Trace-analyse-Agent",
+    "brandColor": "#0E7490",
+    "defaultPrompt": [
+      "Analyze this htrace for cold-start latency",
+      "Find the dropped frames in this scroll trace",
+      "Explain the completion-latency critical path"
+    ],
+    "screenshots": []
+  }
+}

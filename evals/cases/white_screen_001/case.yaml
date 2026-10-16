@@ -1,0 +1,67 @@
+﻿# 人工标注问题区间（相对 trace 起点 t0 的约值，精确 ns 待回填）：
+#   转场事件 ABILITY_OR_PAGE_SWITCH 结束后约 4.11s 开始
+#   约 5.61s 白屏结束，持续约 1500ms
+id: white_screen_001
+
+input:
+  trace: "D:\\Users\\Administrator\\Desktop\\trace\\白屏分析\\jd_white_screen.htrace"
+  type: frame-jank
+  scenario: 京东进入商品详情白屏
+  symptom: 点击进入商品详情后长时间白屏，首屏渲染明显延后
+  time_range: "1485769162578256ns-1485770662578256ns"
+  problem_duration_ms: 1500
+  operation_marker: ABILITY_OR_PAGE_SWITCH
+
+
+metadata:
+  suite: white-screen
+  difficulty: hard
+  tags:
+    - frame-jank
+    - white-screen
+    - jingdong
+    - taro
+    - framework-switch
+
+gold:
+  root_causes:
+    - id: RC001
+      canonical: framework_switch_animation_chain_regression
+      aliases:
+        - Taro 切换框架
+        - 框架切换导致动效链路变化
+        - 原有动效实现变化
+        - 渲染链路发生变化
+        - 动效丢失
+        - 动效无法正常执行
+        - animation chain regression
+    - id: RC002
+      canonical: first_screen_load_cost_increase
+      aliases:
+        - 页面复杂度增加
+        - 加载成本增加
+        - 同时加载自有框架包
+        - 依赖资源增加
+        - 初始化链路增加
+        - 首屏渲染耗时增加
+  bottlenecks:
+    - canonical: animation_chain_degradation
+      aliases:
+        - 动效链路
+        - 部分动效丢失
+        - 动效未执行
+    - canonical: first_screen_dependency_load
+      aliases:
+        - 首屏关键资源
+        - 非首屏依赖
+        - 自有框架包加载
+        - 依赖资源初始化
+  evidence:
+    - type: symbol
+      name: Taro
+      relation: supports_root_cause
+    - type: symbol
+      name: 动效
+      relation: supports_root_cause
+
+  severity: high

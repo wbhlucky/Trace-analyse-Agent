@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -32,9 +33,11 @@ from trace_agent.agent.core import (
     bounded_error,
     bounded_preview,
     extract_json,
+    open_skill_access_audit,
     parse_analysis_result,
     parse_with_submission,
     positive_int_env,
+    record_memory_injection,
     repair_prompt as build_repair_prompt,
     result_diagnostic,
     select,
@@ -53,6 +56,7 @@ class QoderAgentSdkAgent:
         skills: list[SkillDefinition],
         runtime_config: LlmRuntimeConfig | None = None,
         memory_context: str | None = None,
+        memory_hits: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         if not skills:
             raise ValueError("Qoder Agent 至少需要一个分析 Skill")
@@ -63,6 +67,9 @@ class QoderAgentSdkAgent:
         self._project_root = roots.pop()
         self._runtime_config = runtime_config
         self._memory_context = memory_context
+        # Structured recall metadata (id/trust/score/injected) for the audit
+        # line, mirroring the Claude adapter.
+        self._memory_hits = list(memory_hits or [])
 
     async def analyze(
         self,
@@ -118,11 +125,26 @@ class QoderAgentSdkAgent:
             tools=sdk_tools,
         )
         model_resolver = self._create_model_resolver()
+        audit = open_skill_access_audit(request.output_dir)
+        system_prompt_text = self._system_prompt(
+            manual_submission=manual_submission,
+        )
+        if audit is not None:
+            audit.record(
+                tool="skill_discovery",
+                decision="ok",
+                reason="native .qoder/skills",
+                skill="、".join(skill.name for skill in self._skills),
+            )
+        record_memory_injection(
+            audit,
+            memory_context=self._memory_context,
+            system_prompt_text=system_prompt_text,
+            hits=self._memory_hits,
+        )
         options = QoderAgentOptions(
             model=None if model_resolver is not None else request.model,
-            system_prompt=self._system_prompt(
-                manual_submission=manual_submission,
-            ),
+            system_prompt=system_prompt_text,
             cwd=self._project_root,
             cli_path=self._resolve_cli_path(),
             env=(
@@ -152,8 +174,12 @@ class QoderAgentSdkAgent:
                 "PreToolUse": [
                     HookMatcher(
                         matcher="Read",
-                        hooks=[self._create_read_hook()],
-                    )
+                        hooks=[self._create_read_hook(audit)],
+                    ),
+                    HookMatcher(
+                        matcher="Skill",
+                        hooks=[self._create_skill_hook(audit)],
+                    ),
                 ]
             },
             max_turns=self._positive_int_env(
@@ -533,10 +559,17 @@ class QoderAgentSdkAgent:
         del cls
         return qoder_tools.submission_rejection(state, rejection)
 
-    def _create_read_hook(self) -> Any:
+    def _create_read_hook(self, audit: Any | None = None) -> Any:
         return qoder_tools.create_read_hook(
             self._project_root,
             self._skills,
+            audit,
+        )
+
+    def _create_skill_hook(self, audit: Any | None = None) -> Any:
+        return qoder_tools.create_skill_hook(
+            self._skills,
+            audit,
         )
 
     def _is_allowed_skill_file(self, raw_path: Any) -> bool:
@@ -656,4 +689,3 @@ class QoderAgentSdkAgent:
     @staticmethod
     def _bounded_preview(value: Any, limit: int) -> str | None:
         return bounded_preview(value, limit)
-

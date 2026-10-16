@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from trace_agent.memory.backend import JsonMemoryBackend
+from trace_agent.memory.ports import MemoryStore
 from trace_agent.memory.models import ExecutionCheckpointSnapshot
 
 # Ordered stage names used by AnalyzeApplication. Keeping this list in one
@@ -27,7 +27,7 @@ class CheckpointResumeService:
     that callers can use for resume decisions and observability.
     """
 
-    def __init__(self, backend: JsonMemoryBackend) -> None:
+    def __init__(self, backend: MemoryStore) -> None:
         self._backend = backend
 
     def snapshot(self, output_dir: str | Path) -> ExecutionCheckpointSnapshot:

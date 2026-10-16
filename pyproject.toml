@@ -26,10 +26,17 @@ openai = [
 claude = [
     "claude-agent-sdk>=0.2.152",
 ]
+postgres = [
+    "psycopg2-binary>=2.9",
+]
+redis = [
+    "redis>=5",
+]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3,<10",
+    "selenium>=4.27,<5",
 ]
 
 [project.scripts]
@@ -46,3 +53,6 @@ packages = ["src/trace_agent"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "webui: Selenium browser evaluation of the local web panel (needs Chrome)",
+]

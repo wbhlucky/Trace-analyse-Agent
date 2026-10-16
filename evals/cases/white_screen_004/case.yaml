@@ -1,0 +1,46 @@
+﻿# 人工标注问题区间（相对 trace 起点 t0 的约值，精确 ns 待回填）：
+#   转场事件 ABILITY_OR_PAGE_SWITCH 结束后约 12.65s 开始
+#   约 15.45s 白屏结束，持续约 2800ms
+id: white_screen_004
+
+input:
+  trace: "D:\\Users\\Administrator\\Desktop\\trace\\白屏分析\\mtzb_wmg_white_screen.htrace"
+  type: frame-jank
+  scenario: 美团众包点击外卖柜白屏
+  symptom: 点击左上角再点外卖柜后长时间白屏，页面内容迟迟未显示
+  time_range: "1486596979299485ns-1486599779299485ns"
+  problem_duration_ms: 2800
+  operation_marker: ABILITY_OR_PAGE_SWITCH
+
+metadata:
+  suite: white-screen
+  difficulty: hard
+  tags:
+    - frame-jank
+    - white-screen
+    - meituan-zhongbao
+    - render-idle
+
+gold:
+  root_causes:
+    - id: RC001
+      canonical: render_stage_long_running_without_content
+      aliases:
+        - wdsource:render/a.hmcrowdsource
+        - wdsource:render
+        - render 阶段空转
+        - 长时间 running
+        - 无具体运行内容
+        - 不必要的组件重渲染
+  bottlenecks:
+    - canonical: render_pipeline_stall
+      aliases:
+        - render 阶段空转
+        - 渲染管线调度
+        - wdsource:render
+  evidence:
+    - type: symbol
+      name: wdsource:render/a.hmcrowdsource
+      relation: supports_root_cause
+
+  severity: high

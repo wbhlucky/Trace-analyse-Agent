@@ -35,7 +35,7 @@ registry 中登记。运行时按 `--agent` 选择适配器，业务层不感知
 需要 Python 3.12 和 [uv](https://docs.astral.sh/uv/)。在项目根目录执行：
 
 ```powershell
-git clone https://gitcode.com/diting/DitingAgent.git
+git clone https://github.com/wbhlucky/Trace-analyse-Agent.git
 Set-Location DitingAgent
 
 # 主 SDK：Claude Agent SDK
@@ -47,6 +47,13 @@ uv sync --extra claude --extra qoder --extra openai --group dev
 
 这会创建 `.venv` 并安装 DitingAgent 与所选 SDK。Claude Agent SDK 默认随包
 捆绑 Claude Code CLI；如本机已安装 `claude` 亦可复用。
+
+两个可选后端各有自己的 extra，不装也能跑（记忆默认落本地 SQLite）：
+
+```powershell
+uv sync --extra postgres   # TRACE_AGENT_MEMORY_STORE=postgres 需要的驱动
+uv sync --extra redis      # TRACE_AGENT_MEMORY_CACHE=redis 需要的客户端
+```
 
 ### 2. 配置模型凭证
 
@@ -161,7 +168,8 @@ diting-agent eval compare <run-a-id> <run-b-id>
 - 只读领域工具：Trace 概览、基线对比、问题区间候选、冷启动候选、
   完成时延候选、线程执行、Perf Profile 与受限通用 SQL；
 - 提交策略与确定性 Schema 校验，结构化 Draft 与最终 `AnalysisResult`；
-- 可选择的 Memory（会话回忆、情节记忆与离线 Dreaming）；
+- 可选择的 Memory：候选/生效/已验证/归档四档信任、混合检索（CJK bigram 词法 + 语义向量）、
+  离线 Dreaming 治理（冲突检测、信任跃迁、过期归档、摘要），SQLite 索引 + JSON 回滚；
 - 自包含 HTML 报告与机器可读 JSON 输出；
 - 可插拔 SDK：Claude（主）、Qoder、OpenAI（示例）、Local。
 
@@ -203,6 +211,9 @@ Qoder CLI 登录，可另行设置 `QODER_PERSONAL_ACCESS_TOKEN`；它只用于 
 ### 常见问题
 
 - `claude-agent-sdk` 缺失：执行 `uv sync --extra claude`。
+- 记忆报 `no PostgreSQL driver installed (need psycopg or psycopg2)`：执行
+  `uv sync --extra postgres`。报 `redis package not installed`：执行
+  `uv sync --extra redis`。两者都是可选后端，缺驱动时记忆回落本地 SQLite 而不失败。
 - Claude Code CLI 不可用：安装 Claude Agent SDK wheel（含捆绑 CLI），或在
   PATH 中提供 `claude`，或设置 `CLAUDE_CLI_EXECUTABLE` 指向二进制。
 - Qoder `Not logged in`：执行 `qodercli login`，并以 `qodercli --list-models`
@@ -274,6 +285,56 @@ frame-jank          帧率下降、慢帧、丢帧和卡顿
 CPU、调度、锁、IPC、同步 I/O、任务队列和渲染属于可能的根因维度，不是独立问题
 类型。当前阶段不分析内存问题。
 
+## 记忆（Memory）
+
+Agent 会把每次分析投影成 episode，再从 episode 中抽取候选记忆。候选**不会**立刻成为先验：
+只有在**两个以上独立 run** 给出一致结论、置信度达标、且至少一个来源 finding 是
+`confirmed`/`observed` 时，质量闸门才把它升到 `active`；`verified` 还需要更多独立 run、
+eval 判分通过或人工签署。这条链路防的是同一件事——Agent 把自己上一次的猜测当成下一次的证据。
+
+```powershell
+# 记忆库规模、trust 分布、语义索引覆盖率
+diting-agent memory stats [--json]
+
+# JSON <-> SQLite 迁移（幂等，迁移前自动导出备份，迁移后校验计数）
+diting-agent memory migrate --from json --to sqlite [--dry-run]
+
+# 重建全文索引 / 回填向量 / 立即跑一轮治理
+diting-agent memory reindex
+diting-agent memory embed [--limit 32] [--rebuild]
+diting-agent memory maintain [--json]
+
+# 跨实例搬运语料
+diting-agent memory export --out memory-bundle.json
+diting-agent memory import --bundle memory-bundle.json [--dry-run]
+
+# 隔离域盘点 / 语料备份（manifest 记录条数、sha256 与恢复命令）
+diting-agent memory namespaces [--json]
+diting-agent memory backup --out backups/ [--bundle] [--json]
+```
+
+常用开关（完整表见 `docs/memory-optimization-plan.md` §10）：
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `TRACE_AGENT_MEMORY` | `1` | 记忆总开关 |
+| `TRACE_AGENT_MEMORY_ROOT` | 项目内 `.trace-agent/memory` | 语料根目录 |
+| `TRACE_AGENT_MEMORY_STORE` | `sqlite` | `sqlite`（索引）/ `json`（回滚）/ `postgres` |
+| `TRACE_AGENT_MEMORY_DSN` | 空 | `postgres` 必填（驱动见 `--extra postgres`）；不可达时回落本地语料并报 `degraded_reason` |
+| `TRACE_AGENT_MEMORY_NAMESPACE` | `project:default` | 隔离域，检索永不跨域 |
+| `TRACE_AGENT_MEMORY_INCLUDE_CANDIDATE` | `0` | 是否低权重注入未验证候选 |
+| `TRACE_AGENT_MEMORY_EMBEDDING` | `local` | `local`（离线确定性）/ `http` / `off` |
+| `TRACE_AGENT_MEMORY_CACHE` | `off` | `off` / `memory`（进程内 LRU）/ `redis`（客户端见 `--extra redis`）；按 `corpus_epoch` 整域失效 |
+
+原始 trace、`evidence.json`、HTML 报告**不入记忆库**，记忆只保存"从这条 trace 学到了什么"
+以及指回证据的引用。Web 面板的"记忆"页签提供同一份视图：trust 分布、最近版本、
+矛盾/佐证/归并链接、待处理队列与语义覆盖率。
+
+单测证明闸门与召回自洽，`scripts/probe_memory_production_path.py` 证明**分析主链路真的调用了它们**：
+它对一条真实 trace 连跑两次 `analyze`（记忆根隔离），再回读语料、`run.json.memory_trace`
+和两次召回结果——默认一次、放宽闸门一次，因为"被闸门挡住"和"通道坏了"只看默认结果无法区分。
+每次 analyze 都要重新转换 trace（约 5 分钟/次），已跑过就用 `--inspect-only` 只回读。
+
 ## 评测（eval）
 
 项目内置确定性 Agent 评测框架（`diting-agent eval`），按
@@ -321,6 +382,34 @@ evals/
 
 注意：demo 的 `case.yaml` 中 `input.trace` 指向本机路径，直接运行前请替换为
 仓库内提供的脱敏 `evals/fixtures/current.db` 或其它可用 Trace。
+
+### 记忆与 eval 的隔离
+
+eval **默认关闭记忆**：多个 trial 共享一个语料时，trial-0 的猜测会被 trial-1 当作先验召回，
+分数测到的是自污染而不是 Agent 能力。要评测记忆收益，用环境变量做 A/B 两组：
+
+```powershell
+# 对照组：无记忆先验
+diting-agent eval run --root evals/cases --agent local --trials 2
+
+# 实验组：开启记忆，语料自动落到 <output-root>/memory/eval-<hex>，
+# 并打上 eval:<run-id> namespace，生产语料既读不到也写不进
+$env:TRACE_AGENT_MEMORY = "1"
+diting-agent eval run --root evals/cases --agent local --trials 2
+```
+
+实验组的输出末尾会给出记忆半部分，其中 `self-contamination` 是这轮对照是否可信的前置条件：
+
+```text
+Memory: trials=2 injected=0 graded=2
+  namespace: eval:eval-05f092cd0d9f
+  self-contamination: 0.0 [clean] (unverified=0, trusted-same-run=0)
+```
+
+它统计的是"注入 prompt 的记忆中，有多少条出自本次 eval 自己且仍未验证"。若显式打开
+`TRACE_AGENT_MEMORY_INCLUDE_CANDIDATE=1`，审计会如实报 `CONTAMINATED` 并列出具体记录——
+放宽闸门是操作员的决定，指标不该因此变得好看。每个 trial 的 `run.json` 里另有一份
+`memory_trace`（召回 query、命中记录、trust、分数、namespace），用于事后归因。
 
 ## 测试
 

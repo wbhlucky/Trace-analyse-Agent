@@ -16,3 +16,13 @@ results/
 .uv-cache/
 reference_projects/
 *.htrace
+
+# Local scratch / historical debug residue (never contract)
+reports/
+.fresh1/
+.vi-bt*/
+.vi-smoke/
+.vi1.txt
+.vi2.txt
+tmp-agent/
+tmp-agent-plugin/

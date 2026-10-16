@@ -1,0 +1,5 @@
+{
+  "name": "diting-agent-skills",
+  "version": "0.1.0",
+  "description": "Exposes the project-local Agent Skills under .qoder/skills to the Claude Code CLI plugin loader."
+}

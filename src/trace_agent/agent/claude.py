@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -8,6 +9,7 @@ from typing import Any
 from trace_agent.config import LlmRuntimeConfig
 from trace_agent.agent.adapters.claude import client as claude_client
 from trace_agent.agent.adapters.claude import session as claude_session
+from trace_agent.agent.adapters.claude import skills as claude_skill_discovery
 from trace_agent.agent.adapters.claude import tools as claude_tools
 from trace_agent.errors import (
     AgentFailure,
@@ -31,9 +33,11 @@ from trace_agent.agent.core import (
     bounded_error,
     bounded_preview,
     extract_json,
+    open_skill_access_audit,
     parse_analysis_result,
     parse_with_submission,
     positive_int_env,
+    record_memory_injection,
     repair_prompt as build_repair_prompt,
     result_diagnostic,
     select,
@@ -52,6 +56,7 @@ class ClaudeAgentSdkAgent:
         skills: list[SkillDefinition],
         runtime_config: LlmRuntimeConfig | None = None,
         memory_context: str | None = None,
+        memory_hits: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         if not skills:
             raise ValueError("Claude Agent 至少需要一个分析 Skill")
@@ -62,6 +67,10 @@ class ClaudeAgentSdkAgent:
         self._project_root = roots.pop()
         self._runtime_config = runtime_config
         self._memory_context = memory_context
+        # Structured recall metadata (id/trust/score/injected) for the audit
+        # line. Optional and JSON-shaped rather than typed so the adapter does
+        # not have to import the memory models.
+        self._memory_hits = list(memory_hits or [])
 
     async def analyze(
         self,
@@ -100,8 +109,12 @@ class ClaudeAgentSdkAgent:
                     request,
                 )
             )
+        # "Skill" must appear in tools= as well as allowed_tools=: the CLI
+        # derives its base tool set from tools=, so listing it only as allowed
+        # leaves the Skill tool unregistered and the skill listing uninjected.
         allowed_tools = [
             "Read",
+            "Skill",
             *(
                 f"mcp__trace__{definition.name}"
                 for definition in tools.available()
@@ -116,18 +129,38 @@ class ClaudeAgentSdkAgent:
             tools=sdk_tools,
         )
         runtime_env = claude_client.build_runtime_env(self._runtime_config)
+        audit = open_skill_access_audit(request.output_dir)
+        plugin_config, plugin_reason = (
+            claude_skill_discovery.ensure_skill_plugin(self._project_root)
+        )
+        system_prompt_text = self._system_prompt(
+            manual_submission=manual_submission,
+        )
+        if audit is not None:
+            audit.record(
+                tool="skill_discovery",
+                decision="ok" if plugin_config else "unavailable",
+                reason=plugin_reason,
+                skill="、".join(skill.name for skill in self._skills),
+            )
+        record_memory_injection(
+            audit,
+            memory_context=self._memory_context,
+            system_prompt_text=system_prompt_text,
+            hits=self._memory_hits,
+        )
         options = ClaudeAgentOptions(
             model=(
                 request.model
                 or (self._runtime_config.model if self._runtime_config else None)
             ),
-            system_prompt=self._system_prompt(
-                manual_submission=manual_submission,
-            ),
+            system_prompt=system_prompt_text,
             cwd=self._project_root,
             cli_path=self._resolve_cli_path(),
             env=runtime_env,
             setting_sources=["project"],
+            plugins=plugin_config or [],
+            skills=[skill.name for skill in self._skills],
             mcp_servers={"trace": server},
             tools=allowed_tools,
             allowed_tools=allowed_tools,
@@ -146,8 +179,12 @@ class ClaudeAgentSdkAgent:
                 "PreToolUse": [
                     HookMatcher(
                         matcher="Read",
-                        hooks=[self._create_read_hook()],
-                    )
+                        hooks=[self._create_read_hook(audit)],
+                    ),
+                    HookMatcher(
+                        matcher="Skill",
+                        hooks=[self._create_skill_hook(audit)],
+                    ),
                 ]
             },
             max_turns=self._positive_int_env(
@@ -504,10 +541,17 @@ class ClaudeAgentSdkAgent:
         del cls
         return claude_tools.submission_rejection(state, rejection)
 
-    def _create_read_hook(self) -> Any:
+    def _create_read_hook(self, audit: Any | None = None) -> Any:
         return claude_tools.create_read_hook(
             self._project_root,
             self._skills,
+            audit,
+        )
+
+    def _create_skill_hook(self, audit: Any | None = None) -> Any:
+        return claude_tools.create_skill_hook(
+            self._skills,
+            audit,
         )
 
     def _is_allowed_skill_file(self, raw_path: Any) -> bool:

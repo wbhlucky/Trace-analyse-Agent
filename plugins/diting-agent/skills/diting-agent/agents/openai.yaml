@@ -1,0 +1,4 @@
+interface:
+  display_name: "DitingAgent"
+  short_description: "Run evidence-driven performance Trace analysis from a Codex session"
+  default_prompt: "Use $diting-agent to analyze this Trace and summarize the findings with evidence IDs."

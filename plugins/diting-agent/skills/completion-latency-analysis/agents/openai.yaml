@@ -1,0 +1,4 @@
+interface:
+  display_name: "Completion Latency Analysis"
+  short_description: "Analyze input-to-action-completion latency"
+  default_prompt: "Use $completion-latency-analysis to analyze response and full completion latency."

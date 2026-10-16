@@ -1,0 +1,68 @@
+﻿# 人工标注问题区间（相对 trace 起点 t0 的约值，精确 ns 待回填）：
+#   转场事件 ABILITY_OR_PAGE_SWITCH 结束后约 9.9s 开始
+#   约 10.83s 白屏结束，持续约 930ms
+id: white_screen_003
+
+input:
+  trace: "D:\\Users\\Administrator\\Desktop\\trace\\白屏分析\\bili_white_screen.htrace"
+  type: frame-jank
+  scenario: 哔哩哔哩我的页点击动态白屏
+  symptom: 点击动态后页面长时间白屏，内容迟迟未渲染出来
+  time_range: "1486178829308402ns-1486179759308402ns"
+  problem_duration_ms: 930
+  operation_marker: ABILITY_OR_PAGE_SWITCH
+
+metadata:
+  suite: white-screen
+  difficulty: hard
+  tags:
+    - frame-jank
+    - white-screen
+    - bilibili
+    - shader-compile
+    - render-idle
+
+gold:
+  root_causes:
+    - id: RC001
+      canonical: internal_render_framework_idle_running
+      aliases:
+        - aku.bili:render
+        - bilibili 内部渲染框架卡顿
+        - 长时间 running 但无具体运行内容
+        - render 框架空转
+        - 无具体运行内容
+    - id: RC002
+      canonical: runtime_shader_compilation_cost
+      aliases:
+        - Compile Shaders Inner
+        - Shader 编译耗时
+        - 运行时编译开销
+    - id: RC003
+      canonical: loading_timing_not_optimized
+      aliases:
+        - loading 时机
+        - 未提前展示骨架屏
+  bottlenecks:
+    - canonical: render_framework_execution_gap
+      aliases:
+        - aku.bili:render
+        - render 阶段空转
+        - running 无内容
+    - canonical: shader_compile_overhead
+      aliases:
+        - Compile Shaders Inner
+        - Shader 编译
+    - canonical: first_frame_loading_delay
+      aliases:
+        - loading 时机
+        - 骨架屏
+  evidence:
+    - type: symbol
+      name: aku.bili:render
+      relation: supports_root_cause
+    - type: symbol
+      name: Compile Shaders Inner
+      relation: supports_root_cause
+
+  severity: high
